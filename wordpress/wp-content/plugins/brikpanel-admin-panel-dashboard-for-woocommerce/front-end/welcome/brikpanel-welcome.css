@@ -1,0 +1,1091 @@
+/* =============================================================================
+   BrikPanel: welcome tour (the brick tour)
+
+   A native <dialog>. Left pane: the logo plate in 3D; each step lays a brick and
+   the last step flattens the plate into the logo. Right pane: one feature area
+   per step with a hand-drawn sketch, then quick links.
+
+   This file is listed in GLOBAL_FILES of tools/css-collision-audit.php and
+   tools/hidden-attr-audit.php: every selector carries a brikpanel-welcome- class.
+   ============================================================================= */
+
+/* ── Handwriting font (only the notes over the sketches) ────────────────────── */
+@font-face {
+    font-family: "BrikPanel Caveat";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("../../assets/fonts/caveat/caveat-cyrillic.woff2") format("woff2");
+    unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+    font-family: "BrikPanel Caveat";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("../../assets/fonts/caveat/caveat-latin-ext.woff2") format("woff2");
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+    font-family: "BrikPanel Caveat";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("../../assets/fonts/caveat/caveat-latin.woff2") format("woff2");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ── The page behind stays still while the tour is open ─────────────────────── */
+/* On <html>, with !important, for the same reason as html.brikpanel-modal-lock in
+   brikpanel-orders.css: the top bar fixes <body>'s height, so a body lock jumps. */
+html.brikpanel-welcome-lock {
+    overflow-y: hidden !important;
+}
+
+/* ── Dialog ─────────────────────────────────────────────────────────────────── */
+/* No display here: a closed <dialog> must keep the browser's display:none. */
+.brikpanel-welcome-overlay {
+    --bw-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --bw-drop: cubic-bezier(0.34, 1.28, 0.52, 1);
+    --bw-scale: 1;
+    /* How slowly the sketches draw: every line and note delay and duration is
+       multiplied by this. */
+    --bw-ink-pace: 1.5;
+    box-sizing: border-box;
+    width: min(1080px, calc(100vw - 40px));
+    height: min(680px, calc(100vh - 40px));
+    height: min(680px, calc(100dvh - 40px));
+    max-width: none;
+    max-height: none;
+    margin: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 22px;
+    overflow: hidden;
+    background: #ffffff;
+    color: #303030;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 40px 100px -20px rgba(0, 0, 0, 0.45);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+.brikpanel-welcome-overlay::backdrop {
+    background: rgba(28, 28, 32, 0.45);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+}
+
+.brikpanel-welcome-overlay[open] {
+    animation: brikpanel-welcome-rise 0.7s var(--bw-ease) both;
+}
+
+.brikpanel-welcome-overlay[open]::backdrop {
+    animation: brikpanel-welcome-fade 0.5s ease both;
+}
+
+.brikpanel-welcome-overlay.is-closing {
+    animation: brikpanel-welcome-out 0.22s ease forwards;
+}
+
+.brikpanel-welcome-overlay.is-closing::backdrop {
+    animation: brikpanel-welcome-fade-out 0.22s ease forwards;
+}
+
+.brikpanel-welcome-modal {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 100%;
+}
+
+/* It takes focus when the tour opens, so the first Tab lands on the first
+   control and no button shows a focus ring before anyone uses the keyboard. */
+.brikpanel-welcome-modal:focus {
+    outline: none;
+}
+
+.brikpanel-welcome-defs {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+}
+
+/* ── Left pane ──────────────────────────────────────────────────────────────── */
+.brikpanel-welcome-left {
+    position: relative;
+    flex: none;
+    width: 420px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background-color: #efefef;
+    background-image: radial-gradient(circle, rgba(48, 48, 48, 0.13) 1px, transparent 1.4px);
+    background-size: 22px 22px;
+    background-position: 11px 11px;
+}
+
+.brikpanel-welcome-intro {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 38px 40px 0;
+}
+
+/* dir="ltr" in the markup: the grid must never swap the logo's white and grey tiles. */
+.brikpanel-welcome-brand {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #303030;
+}
+
+.brikpanel-welcome-brand-mark {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px;
+    width: 22px;
+    height: 22px;
+    padding: 5px;
+    box-sizing: border-box;
+    border-radius: 6px;
+    background: #303030;
+}
+
+.brikpanel-welcome-brand-mark > span {
+    border-radius: 1.5px;
+    background: #ffffff;
+}
+
+.brikpanel-welcome-brand-mark > span:nth-child(2),
+.brikpanel-welcome-brand-mark > span:nth-child(3) {
+    background: #a3a3a3;
+}
+
+.brikpanel-welcome-title {
+    margin: 6px 0 0;
+    padding: 0;
+    font-size: 30px;
+    line-height: 1.12;
+    letter-spacing: -0.035em;
+    font-weight: 650;
+    color: #1a1a1a;
+    text-wrap: balance;
+}
+
+.brikpanel-welcome-lead {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.5;
+    color: #616161;
+    text-wrap: pretty;
+}
+
+/* ── The plate and its bricks ───────────────────────────────────────────────── */
+/* Never put opacity below 1, filter, clip-path, mask, overflow or contain on the
+   iso, box or brick elements: any of them flattens the 3D. Bricks drop with
+   visibility and transform only. The stage clips, so a falling brick never
+   crosses the title. */
+.brikpanel-welcome-stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.brikpanel-welcome-glow {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 300px;
+    height: 300px;
+    margin: -150px 0 0 -150px;
+    border-radius: 50%;
+    background: radial-gradient(closest-side, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0));
+    opacity: 0;
+    transform: scale(0.6);
+    transition: opacity 1.2s ease 1.2s, transform 1.6s var(--bw-ease) 1.2s;
+}
+
+.brikpanel-welcome-stage.is-done .brikpanel-welcome-glow {
+    opacity: 1;
+    transform: none;
+}
+
+.brikpanel-welcome-persp {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    perspective: 2400px;
+}
+
+.brikpanel-welcome-iso {
+    position: absolute;
+    left: -120px;
+    top: -132px;
+    width: 240px;
+    height: 240px;
+    transform-style: preserve-3d;
+    transform: rotateX(58deg) rotateZ(-45deg) scale3d(var(--bw-scale), var(--bw-scale), var(--bw-scale));
+    transition: transform 1.6s cubic-bezier(0.65, 0, 0.25, 1);
+}
+
+.brikpanel-welcome-stage.is-done .brikpanel-welcome-iso {
+    transform: rotateX(0deg) rotateZ(0deg) scale3d(calc(var(--bw-scale) * 0.66), calc(var(--bw-scale) * 0.66), calc(var(--bw-scale) * 0.66));
+}
+
+.brikpanel-welcome-box {
+    position: absolute;
+    transform-style: preserve-3d;
+}
+
+.brikpanel-welcome-face {
+    position: absolute;
+}
+
+.brikpanel-welcome-ground {
+    left: 14px;
+    top: 26px;
+    width: 240px;
+    height: 240px;
+    border-radius: 14px;
+    background: rgba(0, 0, 0, 0.16);
+    filter: blur(14px);
+    transition: opacity 0.9s ease;
+}
+
+.brikpanel-welcome-plate {
+    left: 0;
+    top: 0;
+    width: 240px;
+    height: 240px;
+}
+
+.brikpanel-welcome-plate-front {
+    left: 0;
+    top: 240px;
+    width: 240px;
+    height: 24px;
+    transform-origin: top;
+    transform: rotateX(90deg);
+    background: #262626;
+}
+
+.brikpanel-welcome-plate-left {
+    left: -24px;
+    top: 0;
+    width: 24px;
+    height: 240px;
+    transform-origin: right;
+    transform: rotateY(90deg);
+    background: #161616;
+}
+
+/* The plate keeps the brand colours: it becomes the logo, not an accent surface. */
+.brikpanel-welcome-plate-top {
+    inset: 0;
+    transform: translateZ(24px);
+    border-radius: 14px;
+    background: #303030;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.brikpanel-welcome-slot {
+    width: 64px;
+    height: 64px;
+    box-sizing: border-box;
+    border: 1.5px dashed rgba(255, 255, 255, 0.28);
+    border-radius: 9px;
+    transform: translateZ(24.4px);
+    transition: opacity 0.4s ease;
+}
+
+.brikpanel-welcome-slot.is-in {
+    opacity: 0;
+}
+
+.brikpanel-welcome-slot.is-next {
+    animation: brikpanel-welcome-slot 1.6s ease-in-out infinite;
+}
+
+.brikpanel-welcome-shadow {
+    width: 64px;
+    height: 64px;
+    border-radius: 9px;
+    background: #000000;
+    opacity: 0;
+    transform: translateZ(24.3px) scale(0.35);
+    filter: blur(7px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.brikpanel-welcome-shadow.is-in {
+    opacity: 0.55;
+    transform: translateZ(24.3px) scale(1);
+    transition: opacity 0.9s ease var(--bd, 0ms), transform 1.05s var(--bw-drop) var(--bd, 0ms);
+}
+
+.brikpanel-welcome-brick {
+    width: 64px;
+    height: 64px;
+    visibility: hidden;
+    transform: translateZ(420px);
+    transition: transform 0.25s ease, visibility 0s linear 0.25s;
+}
+
+.brikpanel-welcome-brick.is-in {
+    visibility: visible;
+    transform: translateZ(24px);
+    transition: transform 1.05s var(--bw-drop) var(--bd, 0ms), visibility 0s linear var(--bd, 0ms);
+}
+
+.brikpanel-welcome-brick-front {
+    left: 0;
+    top: 64px;
+    width: 64px;
+    height: 18px;
+    transform-origin: top;
+    transform: rotateX(90deg);
+}
+
+.brikpanel-welcome-brick-left {
+    left: -18px;
+    top: 0;
+    width: 18px;
+    height: 64px;
+    transform-origin: right;
+    transform: rotateY(90deg);
+}
+
+.brikpanel-welcome-brick-top {
+    inset: 0;
+    transform: translateZ(18px);
+    border-radius: 7px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.brikpanel-welcome-side {
+    transition: opacity 0.9s ease 0.5s;
+}
+
+.brikpanel-welcome-top {
+    transition: border-radius 1.2s var(--bw-ease) 0.4s;
+}
+
+/* The flatten: sides fade, corners round off to the logo's. */
+.brikpanel-welcome-stage.is-done .brikpanel-welcome-side {
+    opacity: 0;
+}
+
+.brikpanel-welcome-stage.is-done .brikpanel-welcome-plate-top {
+    border-radius: 56px;
+}
+
+.brikpanel-welcome-stage.is-done .brikpanel-welcome-brick-top {
+    border-radius: 15px;
+}
+
+.brikpanel-welcome-stage.is-done .brikpanel-welcome-shadow,
+.brikpanel-welcome-stage.is-done .brikpanel-welcome-ground {
+    opacity: 0;
+}
+
+/* ── Step row (the shared scroll strip) ─────────────────────────────────────── */
+.brikpanel-welcome-steps {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    gap: 4px;
+    margin: 0 24px 26px;
+    padding: 4px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.55);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+.brikpanel-welcome-step {
+    flex: 1 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    margin: 0;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: #616161;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+}
+
+.brikpanel-welcome-step:hover {
+    color: #303030;
+}
+
+.brikpanel-welcome-step.is-active {
+    background: #ffffff;
+    color: #1f1f1f;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), inset 0 0 0 1px #e3e3e3;
+}
+
+/* Inside the strip a mask can cut an outline: the ring is drawn inside the button. */
+.brikpanel-welcome-step:focus {
+    outline: none;
+}
+
+.brikpanel-welcome-step:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--brikpanel-ui-focus, #303030);
+}
+
+.brikpanel-welcome-step-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #e3e3e3;
+    color: #616161;
+    font-size: 11px;
+    font-weight: 700;
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.brikpanel-welcome-step.is-seen .brikpanel-welcome-step-num {
+    background: #1a8917;
+    color: #ffffff;
+}
+
+.brikpanel-welcome-step.is-active .brikpanel-welcome-step-num {
+    background: var(--brikpanel-ui-primary, #303030);
+    color: #ffffff;
+}
+
+/* ── Right pane ─────────────────────────────────────────────────────────────── */
+.brikpanel-welcome-right {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.brikpanel-welcome-close {
+    position: absolute;
+    top: 18px;
+    inset-inline-end: 18px;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: #616161;
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.brikpanel-welcome-close:hover {
+    background: #ececec;
+    color: #303030;
+}
+
+.brikpanel-welcome-close:focus {
+    outline: none;
+}
+
+.brikpanel-welcome-close:focus-visible {
+    box-shadow: 0 0 0 2px var(--brikpanel-ui-focus, #303030);
+}
+
+.brikpanel-welcome-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.brikpanel-welcome-panels {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 36px 44px 0;
+}
+
+.brikpanel-welcome-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    box-sizing: border-box;
+    padding-bottom: 16px;
+}
+
+.brikpanel-welcome-panels .brikpanel-welcome-panel[hidden] {
+    display: none;
+}
+
+.brikpanel-welcome-kicker {
+    margin: 0;
+    padding-inline-end: 40px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: #616161;
+    animation: brikpanel-welcome-in 0.7s var(--bw-ease) 0.05s both;
+}
+
+.brikpanel-welcome-kicker--done {
+    color: #1a8917;
+}
+
+.brikpanel-welcome-heading {
+    margin: 8px 0 0;
+    padding: 0;
+    font-size: 27px;
+    line-height: 1.15;
+    letter-spacing: -0.035em;
+    font-weight: 650;
+    color: #1a1a1a;
+    text-wrap: balance;
+    animation: brikpanel-welcome-in 0.7s var(--bw-ease) 0.12s both;
+}
+
+.brikpanel-welcome-text {
+    max-width: 520px;
+    margin: 10px 0 0;
+    font-size: 15px;
+    line-height: 1.55;
+    color: #616161;
+    text-wrap: pretty;
+    animation: brikpanel-welcome-in 0.7s var(--bw-ease) 0.2s both;
+}
+
+.brikpanel-welcome-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 14px 0 16px;
+    padding: 0;
+    list-style: none;
+    animation: brikpanel-welcome-in 0.7s var(--bw-ease) 0.28s both;
+}
+
+.brikpanel-welcome-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    margin: 0;
+    padding: 0 10px 0 8px;
+    padding-inline: 8px 10px;
+    box-sizing: border-box;
+    border: 1px solid #ececee;
+    border-radius: 999px;
+    background: #f6f6f7;
+    color: #303030;
+    font-size: 12.5px;
+    font-weight: 500;
+}
+
+.brikpanel-welcome-chip svg {
+    flex: none;
+    color: #1a8917;
+}
+
+/* ── Sketches ───────────────────────────────────────────────────────────────── */
+.brikpanel-welcome-sketch {
+    position: relative;
+    flex: none;
+    width: 100%;
+    max-width: 560px;
+    aspect-ratio: 2 / 1;
+    margin: auto 0;
+    container-type: inline-size;
+}
+
+.brikpanel-welcome-ink {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    filter: url(#brikpanel-welcome-rough);
+}
+
+.brikpanel-welcome-ink path {
+    fill: none;
+    stroke: #303030;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: brikpanel-welcome-draw calc(var(--dur, 0.7s) * var(--bw-ink-pace)) cubic-bezier(0.55, 0.1, 0.25, 1) calc(var(--dd, 0s) * var(--bw-ink-pace)) forwards;
+}
+
+.brikpanel-welcome-ink .is-thin {
+    stroke-width: 1.5;
+}
+
+.brikpanel-welcome-ink .is-fill {
+    stroke: none;
+    stroke-dasharray: none;
+    opacity: 0;
+    animation: brikpanel-welcome-fade calc(0.7s * var(--bw-ink-pace)) ease calc(var(--dd, 0s) * var(--bw-ink-pace)) forwards;
+}
+
+.brikpanel-welcome-ink .is-dash {
+    stroke-dasharray: 5 6;
+    stroke-dashoffset: 0;
+    opacity: 0;
+    animation: brikpanel-welcome-fade calc(0.7s * var(--bw-ink-pace)) ease calc(var(--dd, 0s) * var(--bw-ink-pace)) forwards;
+}
+
+/* The notes are plain text over the drawing. Appearance sets the merchant's font
+   on every brikpanel- element with !important at (0,1,2); two classes and
+   !important keep the handwriting. */
+.brikpanel-welcome-sketch .brikpanel-welcome-note {
+    position: absolute;
+    margin: 0;
+    font-family: "BrikPanel Caveat", "Segoe Print", "Bradley Hand", cursive !important;
+    font-size: max(15px, 4.5cqw);
+    font-weight: 600;
+    line-height: 1.02;
+    color: #303030;
+    text-wrap: balance;
+    clip-path: inset(-20% 100% -20% -15%);
+    animation: brikpanel-welcome-write calc(var(--dur, 0.8s) * var(--bw-ink-pace)) cubic-bezier(0.4, 0.1, 0.6, 1) calc(var(--dd, 0s) * var(--bw-ink-pace)) forwards;
+}
+
+.brikpanel-welcome-sketch .brikpanel-welcome-note:dir(rtl) {
+    clip-path: inset(-20% -15% -20% 100%);
+}
+
+/* Each note is anchored on the side its arrow leaves from, so a longer
+   translation grows away from the arrow. */
+.brikpanel-welcome-note--is-profit {
+    left: 82.5%;
+    bottom: 57.8%;
+    max-width: 14%;
+}
+
+.brikpanel-welcome-note--is-orders {
+    left: 77.9%;
+    bottom: 22.9%;
+    max-width: 22%;
+}
+
+.brikpanel-welcome-note--is-vip {
+    left: 63.9%;
+    bottom: 85.7%;
+    transform: rotate(-6deg);
+    transform-origin: left bottom;
+}
+
+.brikpanel-welcome-note--is-loyal {
+    left: 25.4%;
+    top: 84.3%;
+    max-width: 40%;
+    text-align: center;
+    transform: translateX(-50%) rotate(-3deg);
+}
+
+.brikpanel-welcome-sketch .brikpanel-welcome-note--is-risk {
+    left: 74.6%;
+    top: 84.3%;
+    max-width: 40%;
+    text-align: center;
+    color: #616161;
+    transform: translateX(-50%) rotate(3deg);
+}
+
+.brikpanel-welcome-note--is-connect {
+    left: 71.4%;
+    top: 79.3%;
+    max-width: 50%;
+    text-align: center;
+    transform: translateX(-50%) rotate(-3deg);
+}
+
+/* ── Final panel: quick links ───────────────────────────────────────────────── */
+.brikpanel-welcome-links {
+    margin: 22px 0 24px;
+    padding: 0;
+    list-style: none;
+    border: 1px solid #e3e3e3;
+    border-radius: 14px;
+    overflow: hidden;
+    animation: brikpanel-welcome-in 0.7s var(--bw-ease) 0.3s both;
+}
+
+.brikpanel-welcome-links > li {
+    margin: 0;
+}
+
+.brikpanel-welcome-links > li + li {
+    border-top: 1px solid #ececec;
+}
+
+.brikpanel-welcome-link {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 13px 16px;
+    background: #ffffff;
+    color: #303030;
+    text-decoration: none;
+    transition: background-color 0.15s ease;
+}
+
+.brikpanel-welcome-link:hover {
+    background: #f7f7f7;
+    color: #303030;
+}
+
+/* WordPress's a:focus turns links blue and draws a ring the list would clip. */
+.brikpanel-welcome-link:focus {
+    color: #303030;
+    outline: none;
+    box-shadow: none;
+}
+
+.brikpanel-welcome-link:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--brikpanel-ui-focus, #303030);
+}
+
+.brikpanel-welcome-link-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: #f1f1f1;
+    color: #303030;
+}
+
+.brikpanel-welcome-link-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+
+.brikpanel-welcome-link-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1a1a;
+}
+
+.brikpanel-welcome-link-desc {
+    font-size: 13px;
+    line-height: 1.4;
+    color: #616161;
+}
+
+.brikpanel-welcome-link-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    font-size: 13px;
+    font-weight: 600;
+    color: #303030;
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────────── */
+.brikpanel-welcome-footer {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 80px;
+    box-sizing: border-box;
+    padding-block: 12px;
+    padding-inline: 44px 28px;
+    border-top: 1px solid #ececec;
+    background: #ffffff;
+}
+
+.brikpanel-welcome-footer-gap {
+    flex: 1;
+}
+
+/* Layout only: the look is the shared brikpanel-btn. */
+.brikpanel-welcome-next,
+.brikpanel-welcome-back,
+.brikpanel-welcome-go {
+    min-height: var(--brikpanel-control-h, 40px);
+}
+
+.brikpanel-welcome-footer .brikpanel-welcome-skip[hidden],
+.brikpanel-welcome-footer .brikpanel-welcome-back[hidden],
+.brikpanel-welcome-footer .brikpanel-welcome-next[hidden],
+.brikpanel-welcome-footer .brikpanel-welcome-go[hidden] {
+    display: none;
+}
+
+body.rtl .brikpanel-welcome-overlay .brikpanel-welcome-arrow {
+    transform: scaleX(-1);
+}
+
+/* ── Tablet ─────────────────────────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+    .brikpanel-welcome-left {
+        width: clamp(300px, 36%, 420px);
+    }
+
+    .brikpanel-welcome-stage {
+        --bw-scale: 0.8;
+    }
+
+    .brikpanel-welcome-intro {
+        padding: 32px 28px 0;
+    }
+
+    .brikpanel-welcome-title {
+        font-size: 26px;
+    }
+
+    .brikpanel-welcome-steps {
+        margin: 0 16px 20px;
+    }
+
+    .brikpanel-welcome-panels {
+        padding: 32px 32px 0;
+    }
+
+    .brikpanel-welcome-footer {
+        padding-inline: 32px 24px;
+    }
+}
+
+/* ── Phone ──────────────────────────────────────────────────────────────────── */
+/* A full-screen sheet: brand, title, a small plate and the step row on top; the
+   step content scrolls; the footer stays at the bottom. */
+@media (max-width: 782px) {
+    .brikpanel-welcome-overlay {
+        width: 100%;
+        height: 100%;
+        height: 100dvh;
+        border-radius: 0;
+        box-shadow: none;
+    }
+
+    .brikpanel-welcome-modal {
+        flex-direction: column;
+    }
+
+    .brikpanel-welcome-left {
+        flex: none;
+        width: auto;
+    }
+
+    .brikpanel-welcome-intro {
+        gap: 6px;
+        padding-block: 16px 0;
+        padding-inline: 20px 60px;
+    }
+
+    .brikpanel-welcome-title {
+        margin: 0;
+        font-size: 22px;
+    }
+
+    .brikpanel-welcome-lead {
+        display: none;
+    }
+
+    .brikpanel-welcome-stage {
+        flex: none;
+        height: 132px;
+        --bw-scale: 0.5;
+    }
+
+    .brikpanel-welcome-steps {
+        margin: 0 12px 12px;
+    }
+
+    .brikpanel-welcome-step {
+        padding: 6px 10px;
+    }
+
+    /* The close button sits on the sheet's top corner, over the left pane. */
+    .brikpanel-welcome-right {
+        position: static;
+        flex: 1;
+        min-height: 0;
+    }
+
+    .brikpanel-welcome-close {
+        top: 12px;
+        inset-inline-end: 12px;
+    }
+
+    .brikpanel-welcome-panels {
+        padding: 20px 20px 0;
+    }
+
+    .brikpanel-welcome-kicker {
+        padding-inline-end: 0;
+    }
+
+    .brikpanel-welcome-heading {
+        font-size: 22px;
+    }
+
+    .brikpanel-welcome-footer {
+        gap: 8px;
+        min-height: 64px;
+        padding-block: 10px max(10px, env(safe-area-inset-bottom));
+        padding-inline: 16px;
+    }
+}
+
+@media (max-width: 782px) and (max-height: 700px) {
+    .brikpanel-welcome-stage {
+        display: none;
+    }
+}
+
+/* ── Reduced motion: end states, nothing moves ──────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    .brikpanel-welcome-overlay[open],
+    .brikpanel-welcome-overlay[open]::backdrop,
+    .brikpanel-welcome-overlay.is-closing,
+    .brikpanel-welcome-overlay.is-closing::backdrop,
+    .brikpanel-welcome-kicker,
+    .brikpanel-welcome-heading,
+    .brikpanel-welcome-text,
+    .brikpanel-welcome-chips,
+    .brikpanel-welcome-links,
+    .brikpanel-welcome-slot.is-next {
+        animation: none;
+    }
+
+    .brikpanel-welcome-ink path {
+        animation: none;
+        stroke-dashoffset: 0;
+    }
+
+    .brikpanel-welcome-ink .is-fill,
+    .brikpanel-welcome-ink .is-dash {
+        animation: none;
+        opacity: 1;
+    }
+
+    .brikpanel-welcome-sketch .brikpanel-welcome-note,
+    .brikpanel-welcome-sketch .brikpanel-welcome-note:dir(rtl) {
+        animation: none;
+        clip-path: none;
+    }
+
+    .brikpanel-welcome-overlay .brikpanel-welcome-glow,
+    .brikpanel-welcome-overlay .brikpanel-welcome-iso,
+    .brikpanel-welcome-overlay .brikpanel-welcome-side,
+    .brikpanel-welcome-overlay .brikpanel-welcome-top,
+    .brikpanel-welcome-overlay .brikpanel-welcome-ground,
+    .brikpanel-welcome-overlay .brikpanel-welcome-slot,
+    .brikpanel-welcome-overlay .brikpanel-welcome-shadow,
+    .brikpanel-welcome-overlay .brikpanel-welcome-shadow.is-in,
+    .brikpanel-welcome-overlay .brikpanel-welcome-brick,
+    .brikpanel-welcome-overlay .brikpanel-welcome-brick.is-in {
+        transition: none;
+    }
+}
+
+/* ── Keyframes ──────────────────────────────────────────────────────────────── */
+@keyframes brikpanel-welcome-rise {
+    from {
+        opacity: 0;
+        transform: translateY(18px) scale(0.985);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@keyframes brikpanel-welcome-out {
+    to {
+        opacity: 0;
+        transform: translateY(8px) scale(0.99);
+    }
+}
+
+@keyframes brikpanel-welcome-fade {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes brikpanel-welcome-fade-out {
+    to {
+        opacity: 0;
+    }
+}
+
+@keyframes brikpanel-welcome-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@keyframes brikpanel-welcome-draw {
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+@keyframes brikpanel-welcome-write {
+    to {
+        clip-path: inset(-20% -15% -20% -15%);
+    }
+}
+
+@keyframes brikpanel-welcome-slot {
+    0%,
+    100% {
+        border-color: rgba(255, 255, 255, 0.28);
+    }
+    50% {
+        border-color: rgba(255, 255, 255, 0.75);
+    }
+}

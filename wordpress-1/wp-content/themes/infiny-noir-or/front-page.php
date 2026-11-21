@@ -1,0 +1,23 @@
+<?php get_header(); ?>
+<main id="main">
+<section class="hero" aria-labelledby="hero-title">
+<div class="hero-content"><p class="eyebrow"><?php echo esc_html(get_theme_mod('phoenix_eyebrow', 'PHOENIX LUNETIER · MADAGASCAR')); ?></p><h1 id="hero-title"><?php echo esc_html(get_theme_mod('phoenix_headline', 'Un regard. Une signature.')); ?></h1><p class="hero-intro"><?php echo esc_html(get_theme_mod('phoenix_intro', 'Solaires affirmées, montures de caractère. Découvrez les lunettes qui révèlent votre personnalité.')); ?></p><a class="button" href="<?php echo esc_url(infiny_shop_url()); ?>"><?php echo esc_html(get_theme_mod('phoenix_button', 'Explorer la collection')); ?><span aria-hidden="true">↗</span></a><a class="hero-secondary" href="<?php echo esc_url(infiny_category_url('lunettes-de-soleil')); ?>">Trouver mes solaires <span aria-hidden="true">→</span></a></div>
+<div class="hero-visual"><img src="<?php echo esc_url(infiny_image('hero')); ?>" alt="Illustration d’une monture solaire dorée aux verres fumés" fetchpriority="high" width="1200" height="900"><span class="visual-caption">LE REGARD PHOENIX <span>01 / 02</span></span></div>
+</section>
+<div class="signature-strip" aria-hidden="true"><span>LE CARACTÈRE D’UNE MONTURE</span><span>✦</span><span>LA LIBERTÉ D’UN STYLE</span><span>✦</span><span>L’ESPRIT PHOENIX</span></div>
+<section class="section collections" id="collections"><div class="section-heading"><div><p class="eyebrow">À CHAQUE REGARD, SA MONTURE</p><h2>Deux univers. Votre style.</h2></div><p>Une nouvelle façon de voir.<br>Une autre façon d’être vu.</p></div><div class="collection-grid">
+<?php foreach (array('collection' => array('01', 'Lunettes de soleil', 'L’allure en pleine lumière', 'lunettes-de-soleil'), 'accessory' => array('02', 'Lunettes de vue', 'Le caractère au quotidien', 'lunettes-de-vue')) as $key => $item) : ?>
+<a class="collection-card" href="<?php echo esc_url(infiny_category_url($item[3])); ?>"><div class="collection-image"><img loading="lazy" src="<?php echo esc_url(infiny_image($key)); ?>" alt="<?php echo esc_attr('Illustration — ' . $item[1]); ?>" width="900" height="650"><span class="collection-number"><?php echo esc_html($item[0]); ?> / PHOENIX</span></div><div class="collection-label"><div><p class="eyebrow"><?php echo esc_html($item[2]); ?></p><h3><?php echo esc_html($item[1]); ?></h3></div><span aria-hidden="true">↗</span></div></a>
+<?php endforeach; ?></div></section>
+<section class="section selection" id="nouveautes"><div class="section-heading"><div><p class="eyebrow">LA SÉLECTION PHOENIX</p><h2>À découvrir maintenant.</h2></div><a class="text-link" href="<?php echo esc_url(infiny_shop_url()); ?>">Toutes les lunettes <span aria-hidden="true">↗</span></a></div>
+<?php
+$eyewear = class_exists('WooCommerce') ? wc_get_products(array('status' => 'publish', 'limit' => 4, 'category' => array('lunettes-de-soleil', 'lunettes-de-vue'), 'visibility' => 'catalog', 'orderby' => 'date', 'order' => 'DESC', 'return' => 'ids')) : array();
+if ($eyewear) {
+    echo do_shortcode('[products ids="' . esc_attr(implode(',', array_map('absint', $eyewear))) . '" columns="4" orderby="date" order="DESC"]');
+} else { ?>
+<div class="catalog-intro"><div class="catalog-icon" aria-hidden="true">✦</div><h3>Votre prochaine monture vous attend.</h3><p>Explorez nos univers et découvrez notre sélection de lunettes.</p><a class="button button-dark" href="<?php echo esc_url(infiny_shop_url()); ?>">Découvrir la boutique <span aria-hidden="true">↗</span></a></div>
+<?php } ?>
+</section>
+<section class="editorial" id="maison"><div class="editorial-art"><img src="<?php echo esc_url(infiny_image('logo')); ?>" alt="Emblème Phoenix" loading="lazy" width="1600" height="1600"></div><div class="editorial-content"><p class="eyebrow">PHOENIX LUNETIER · MADAGASCAR</p><h2>Plus qu’une monture.<br>Une personnalité.</h2><p><?php echo esc_html(get_theme_mod('phoenix_story', 'Une monture ne se choisit pas seulement pour son style. Elle exprime votre regard sur le monde. Chez Phoenix Lunetier, découvrez un univers dédié aux lunettes de soleil et aux montures de vue à Madagascar.')); ?></p><a class="text-link" href="<?php echo esc_url(infiny_shop_url()); ?>">Trouver ma signature <span aria-hidden="true">↗</span></a></div></section>
+<section class="discovery section"><p class="eyebrow">L’ART DE CHOISIR</p><h2>Quel sera votre regard ?</h2><div class="discovery-links"><a href="<?php echo esc_url(infiny_category_url('lunettes-de-soleil')); ?>">Lunettes de soleil <span aria-hidden="true">↗</span></a><a href="<?php echo esc_url(infiny_category_url('lunettes-de-vue')); ?>">Lunettes de vue <span aria-hidden="true">↗</span></a></div></section>
+</main><?php get_footer(); ?>

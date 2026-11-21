@@ -1,0 +1,2785 @@
+/* ==========================================================================
+   BrikPanel – Product taxonomy screens
+   Tags, Brands, Categories, attribute terms (pa_*), Products > Attributes and
+   their edit screens. Same visual language as the orders list: a page head
+   with Screen Options and an "Add new" button, the add form in a slide-in
+   panel, the table in one card. The structure is built by
+   brikpanel-taxonomy-screen.js; the folder tree by
+   brikpanel-category-enhancements.js.
+
+   Specificity: WordPress core and some themes (WoodMart styles #addtag,
+   #edittag and the attributes form with id selectors) style these screens, so
+   the form rules below go through #col-left / #edittag to win without
+   !important where possible.
+   ========================================================================== */
+
+:root {
+    --bpl-bg: #f1f1f1;
+    --bpl-card: #ffffff;
+    --bpl-text: #303030;
+    --bpl-text-secondary: #616161;
+    --bpl-text-placeholder: #8a8a8a;
+    --bpl-border: #e3e3e3;
+    --bpl-input-border: #8a8a8a;
+    --bpl-input-focus: #303030;
+    --bpl-primary: #303030;
+    --bpl-primary-hover: #1a1a1a;
+    --bpl-hover-bg: #f7f7f7;
+    --bpl-success: #1a8917;
+    --bpl-error: #d72c0d;
+    --bpl-ease: cubic-bezier(.4, 0, .2, 1);
+}
+
+/* ---------- Page layout ---------------------------------------------------- */
+
+/* WooCommerce zeroes this padding only on its "embed" screens (Tags,
+   Categories, attribute terms) but not on Brands, so the pages started at
+   different offsets. Its `overflow-x: hidden` there also turned #wpcontent
+   into a scroll box, which stops the bulk action bar from sticking; clip
+   crops the same way without that. */
+body.brikpanel-tax #wpcontent {
+    padding-right: 0 !important;
+    padding-left: 0 !important;
+    overflow-x: clip !important;
+}
+
+body.brikpanel-tax #wpbody-content {
+    float: none;
+    padding-bottom: 2rem;
+}
+
+body.brikpanel-tax #wpbody-content > .wrap {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0 20px;
+}
+
+body.brikpanel-tax #wpfooter {
+    display: none !important;
+}
+
+/* Hidden until the screen script has moved things into place, so the old
+   two-column layout never flashes. If the script never runs, the page still
+   appears after a moment with the form inline. */
+body.brikpanel-tax.js:not(.brikpanel-tax-ready) #wpbody-content {
+    opacity: 0;
+    animation: brikpanel-tax-reveal 0s linear 1.2s forwards;
+}
+
+@keyframes brikpanel-tax-reveal {
+    to { opacity: 1; }
+}
+
+body.brikpanel-tax.brikpanel-tax-ready #wpbody-content {
+    opacity: 1;
+    transition: opacity .15s ease;
+}
+
+body.brikpanel-tax .wrap > br.clear,
+body.brikpanel-tax .wrap > hr.wp-header-end + br.clear {
+    display: none;
+}
+
+/* ---------- Notices -------------------------------------------------------- */
+
+/* Hide WP inline notices but keep errors (both flavours: core and WooCommerce
+   still print the legacy `error` class) and the core update message
+   (#message, e.g. "Tag updated."). */
+body.brikpanel-tax .notice:not(.brikpanel-notice):not(.notice-error):not(.error):not(#message) {
+    display: none;
+}
+
+body.brikpanel-tax .wrap > #message,
+body.brikpanel-tax .wrap > .notice-error,
+body.brikpanel-tax .wrap > .error:not(.hidden),
+body.brikpanel-tax .wrap > .updated {
+    box-sizing: border-box;
+    margin: 0 0 16px !important;
+    padding: 10px 14px !important;
+    border: 1px solid #b7e1b0 !important;
+    border-radius: .5rem;
+    background: #e4f5e1;
+    box-shadow: none;
+    color: #1a6b15;
+}
+
+/* #message carries `error` when an action failed ("Tag not added."); the id
+   rule above would otherwise keep it green. */
+body.brikpanel-tax .wrap > .notice-error,
+body.brikpanel-tax .wrap > .error:not(.hidden),
+body.brikpanel-tax .wrap > #message.error,
+body.brikpanel-tax .wrap > #message.notice-error {
+    border-color: #f1b0b0 !important;
+    background: #fce4e4;
+    color: #c62828;
+}
+
+body.brikpanel-tax .wrap > .notice.is-dismissible {
+    position: relative;
+    padding-right: 40px !important;
+}
+
+body.brikpanel-tax .wrap > .notice .notice-dismiss {
+    top: 50%;
+    right: 6px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: .375rem;
+    transform: translateY(-50%);
+}
+
+body.brikpanel-tax .wrap > .notice .notice-dismiss::before {
+    width: 28px;
+    height: 28px;
+    color: currentColor;
+    font-size: 16px;
+    line-height: 28px;
+    opacity: .7;
+}
+
+body.brikpanel-tax .wrap > .notice .notice-dismiss:hover::before {
+    opacity: 1;
+}
+
+body.rtl.brikpanel-tax .wrap > .notice.is-dismissible {
+    padding-right: 14px !important;
+    padding-left: 40px !important;
+}
+
+body.rtl.brikpanel-tax .wrap > .notice .notice-dismiss {
+    right: auto;
+    left: 6px;
+}
+
+/* The text takes the box's green or red. WordPress 7.0 core colours
+   `.notice p` and `div.notice a` directly, so the box colour alone no longer
+   reaches them. */
+body.brikpanel-tax .wrap > #message p,
+body.brikpanel-tax .wrap > .notice-error p,
+body.brikpanel-tax .wrap > .error p,
+body.brikpanel-tax .wrap > .updated p {
+    margin: 0;
+    padding: 0;
+    color: inherit;
+    font-size: .8125rem;
+    font-weight: 550;
+}
+
+body.brikpanel-tax .wrap > #message p + p {
+    margin-top: 4px;
+}
+
+body.brikpanel-tax .wrap > #message a,
+body.brikpanel-tax .wrap > .notice-error a,
+body.brikpanel-tax .wrap > .error a,
+body.brikpanel-tax .wrap > .updated a {
+    color: inherit;
+}
+
+/* Core's reply after adding a term, and add errors. Sits at the top of the
+   add panel. */
+body.brikpanel-tax #ajax-response .notice {
+    display: block;
+    margin: 0 0 16px !important;
+    padding: 10px 36px 10px 14px !important;
+    border: 1px solid #b7e1b0 !important;
+    border-radius: .5rem !important;
+    background: #e4f5e1 !important;
+    box-shadow: none !important;
+    color: #1a6b15 !important;
+}
+
+body.brikpanel-tax #ajax-response .notice > p {
+    margin: 0 !important;
+    padding: 0 !important;
+    color: inherit;
+    font-size: .8125rem;
+    font-weight: 550;
+}
+
+body.brikpanel-tax #ajax-response .notice-error,
+body.brikpanel-tax #ajax-response .error {
+    border-color: #f1b0b0 !important;
+    background: #fce4e4 !important;
+    color: #c62828 !important;
+}
+
+/* The success copy is shown as a toast; the panel only keeps errors. */
+body.brikpanel-tax.brikpanel-tax-has-panel #ajax-response .notice:not(.notice-error):not(.error) {
+    display: none;
+}
+
+body.brikpanel-tax #col-left #woocommerce_errors {
+    margin: 0 0 16px;
+    padding: 10px 14px;
+    border: 1px solid #f1b0b0;
+    border-radius: .5rem;
+    background: #fce4e4;
+    box-shadow: none;
+    color: #c62828;
+}
+
+body.brikpanel-tax #col-left #woocommerce_errors p {
+    margin: 0;
+    padding: 0;
+    font-size: .8125rem;
+    font-weight: 550;
+}
+
+/* ---------- Page head ------------------------------------------------------ */
+
+body.brikpanel-tax .brikpanel-page-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    min-height: 32px;
+    margin: 20px 0 16px;
+}
+
+body.brikpanel-tax .brikpanel-page-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+body.brikpanel-tax .wrap .brikpanel-page-top .wp-heading-inline {
+    display: block;
+    margin: 0 !important;
+    padding: 0 !important;
+    color: var(--bpl-text);
+    font-size: 1.125rem !important;
+    font-weight: 600 !important;
+    line-height: 32px !important;
+}
+
+body.brikpanel-tax .brikpanel-page-title .subtitle {
+    margin: 0;
+    padding: 0;
+    color: var(--bpl-text-secondary);
+    font-size: .8125rem;
+}
+
+body.brikpanel-tax .brikpanel-page-back {
+    box-sizing: border-box;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: .5rem;
+    background: var(--bpl-card);
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+    color: var(--bpl-text);
+    text-decoration: none;
+    transition: background-color .15s ease;
+}
+
+body.brikpanel-tax .brikpanel-page-back:hover {
+    background: var(--bpl-hover-bg);
+    color: var(--bpl-text);
+}
+
+/* Focus rings only for the keyboard (:focus-visible); a mouse click leaves
+   the control as it looks at rest. */
+body.brikpanel-tax .brikpanel-page-back:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+}
+
+body.brikpanel-tax .brikpanel-page-back:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 2px;
+}
+
+.rtl .brikpanel-page-back svg {
+    transform: scaleX(-1);
+}
+
+body.brikpanel-tax .brikpanel-page-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Primary action ("Add new tag", "Add new attribute", …). */
+body.brikpanel-tax .brikpanel-page-actions .page-title-action,
+body.brikpanel-tax .wrap .brikpanel-page-actions .page-title-action {
+    position: static;
+    top: auto;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    min-height: 32px;
+    margin: 0;
+    padding: 0 14px;
+    border: 0;
+    border-radius: .5rem;
+    background: var(--bpl-primary);
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .2), inset 0 1px 0 rgba(255, 255, 255, .1);
+    color: #fff;
+    cursor: pointer;
+    font-size: .8125rem;
+    font-weight: 550;
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background-color .15s ease;
+}
+
+body.brikpanel-tax .brikpanel-page-actions .page-title-action:hover,
+body.brikpanel-tax .brikpanel-page-actions .page-title-action:active {
+    border: 0;
+    background: var(--bpl-primary-hover);
+    color: #fff;
+}
+
+body.brikpanel-tax .brikpanel-page-actions .page-title-action:focus {
+    outline: none;
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .2), inset 0 1px 0 rgba(255, 255, 255, .1);
+    color: #fff;
+}
+
+body.brikpanel-tax .brikpanel-page-actions .page-title-action:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 2px;
+}
+
+/* Screen Options as a secondary button. Id-qualified: WordPress styles the
+   toggle through #screen-meta-links. */
+body.brikpanel-tax .brikpanel-page-actions #screen-meta-links {
+    display: flex;
+    float: none;
+    margin: 0;
+}
+
+body.brikpanel-tax .brikpanel-page-actions #screen-meta-links .screen-meta-toggle {
+    position: static !important;
+    float: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+}
+
+/* Some WooCommerce builds clip the toggles on .woocommerce-admin-page screens
+   (a screen-reader clip on #screen-options-link-wrap, because WC normally
+   prints its own header). Two ids outrank WC's `.woocommerce-admin-page #id`.
+   No-op where WC does not clip. */
+body.brikpanel-tax #screen-meta-links #screen-options-link-wrap,
+body.brikpanel-tax #screen-meta-links #contextual-help-link-wrap {
+    position: relative;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    clip: auto;
+    clip-path: none;
+    white-space: nowrap;
+}
+
+body.brikpanel-tax .brikpanel-page-actions #screen-meta-links .show-settings {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    min-height: 32px;
+    margin: 0;
+    padding: 0 12px;
+    border: 0;
+    border-radius: .5rem;
+    background: var(--bpl-card);
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+    color: var(--bpl-text);
+    font-size: .8125rem;
+    font-weight: 550;
+    line-height: 1;
+    white-space: nowrap;
+    transition: background-color .15s ease;
+}
+
+body.brikpanel-tax .brikpanel-page-actions #screen-meta-links .show-settings::before {
+    content: "";
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    background-color: var(--bpl-text-secondary);
+    mask: url(../orders/icons/bp-sliders.svg) center / contain no-repeat;
+    -webkit-mask: url(../orders/icons/bp-sliders.svg) center / contain no-repeat;
+}
+
+body.brikpanel-tax .brikpanel-page-actions #screen-meta-links .show-settings::after {
+    content: none;
+}
+
+body.brikpanel-tax .brikpanel-page-actions #screen-meta-links .show-settings:hover,
+body.brikpanel-tax .brikpanel-page-actions #screen-meta-links .show-settings.screen-meta-active {
+    background: var(--bpl-hover-bg);
+    color: var(--bpl-text);
+}
+
+body.brikpanel-tax .brikpanel-page-actions #screen-meta-links .show-settings:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+}
+
+body.brikpanel-tax .brikpanel-page-actions #screen-meta-links .show-settings:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 2px;
+}
+
+/* Its panel opens as a card under the head. */
+body.brikpanel-tax .wrap > #screen-meta {
+    box-sizing: border-box;
+    margin: 0 0 16px;
+    border: 1px solid var(--bpl-border);
+    border-radius: .75rem;
+    background-color: var(--bpl-card);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+    color: var(--bpl-text);
+}
+
+body.brikpanel-tax .wrap > #screen-meta #screen-options-wrap {
+    padding: 14px 16px;
+}
+
+body.brikpanel-tax .wrap > #screen-meta fieldset {
+    margin: 0 0 12px;
+    padding: 0;
+    border: 0;
+}
+
+body.brikpanel-tax .wrap > #screen-meta fieldset legend,
+body.brikpanel-tax .wrap > #screen-meta h5 {
+    margin-bottom: 6px;
+    color: var(--bpl-text);
+    font-size: .8125rem;
+    font-weight: 600;
+}
+
+body.brikpanel-tax .wrap > #screen-meta label {
+    color: var(--bpl-text);
+    font-size: .8125rem;
+}
+
+body.brikpanel-tax .wrap > #screen-meta input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    border: 0;
+    border-radius: 4px;
+    box-shadow: inset 0 0 0 1px var(--bpl-input-border);
+}
+
+body.brikpanel-tax .wrap > #screen-meta input[type="checkbox"]:checked {
+    background-color: var(--bpl-primary);
+    box-shadow: none;
+}
+
+body.brikpanel-tax .wrap > #screen-meta input[type="checkbox"]:checked::before {
+    content: "";
+    width: 8px;
+    height: 4px;
+    margin: 4px 0 0 3px;
+    border: solid #fff;
+    border-width: 0 0 2px 2px;
+    transform: rotate(-45deg);
+}
+
+body.brikpanel-tax .wrap > #screen-meta input[type="number"] {
+    min-height: 30px;
+    border: 1px solid var(--bpl-input-border);
+    border-radius: .5rem;
+    box-shadow: none;
+}
+
+body.brikpanel-tax .wrap > #screen-meta input[type="number"]:focus {
+    border-color: var(--bpl-input-focus);
+    box-shadow: 0 0 0 1px var(--bpl-input-focus);
+}
+
+body.brikpanel-tax .wrap > #screen-meta .button-primary,
+body.brikpanel-tax .wrap > #screen-meta #screen-options-apply {
+    min-height: 30px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: .5rem;
+    background: var(--bpl-primary);
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .2), inset 0 1px 0 rgba(255, 255, 255, .1);
+    color: #fff;
+    font-weight: 550;
+}
+
+body.brikpanel-tax .wrap > #screen-meta .button-primary:hover,
+body.brikpanel-tax .wrap > #screen-meta #screen-options-apply:hover {
+    background: var(--bpl-primary-hover);
+}
+
+/* ---------- Columns -------------------------------------------------------- */
+
+body.brikpanel-tax #col-container {
+    display: block;
+}
+
+body.brikpanel-tax #col-right {
+    float: none;
+    width: 100%;
+}
+
+body.brikpanel-tax #col-right .col-wrap {
+    padding: 0;
+}
+
+/* ---------- Table card ----------------------------------------------------- */
+
+body.brikpanel-tax .brikpanel-tax-card {
+    box-sizing: border-box;
+    border: 1px solid var(--bpl-border);
+    border-radius: .75rem;
+    background: var(--bpl-card);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+    /* clip, not hidden: hidden would make the card the scroll box of the
+       sticky bulk action bar. */
+    overflow: hidden;
+    overflow: clip;
+}
+
+/* Toolbar: search on the left, tree controls on the right. */
+body.brikpanel-tax .brikpanel-tax-toolbar {
+    box-sizing: border-box;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-height: 45px;
+    padding: 8px;
+    border-bottom: 1px solid var(--bpl-border);
+}
+
+/* An empty list has no search box (core leaves it out, or tags.js hides it
+   after the last term is deleted) and no tree controls: no empty band. */
+body.brikpanel-tax .brikpanel-tax-toolbar:not(:has(.search-box:not([style*="none"]))):not(:has(.brikpanel-tree-tools)) {
+    display: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-toolbar-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-inline-start: auto;
+}
+
+body.brikpanel-tax .brikpanel-tax-toolbar-tools:empty {
+    display: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-search {
+    flex: 1 1 260px;
+    max-width: 420px;
+    margin: 0;
+    padding: 0;
+}
+
+body.brikpanel-tax .brikpanel-tax-search .search-box {
+    position: relative;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    float: none;
+    width: 100%;
+    height: 30px;
+    margin: 0;
+    padding: 0 4px 0 9px;
+    border: 1px solid var(--bpl-border);
+    border-radius: .5rem;
+    background: var(--bpl-card);
+    transition: border-color .2s ease;
+}
+
+body.brikpanel-tax .brikpanel-tax-search .search-box:focus-within {
+    border-color: #c9c9c9;
+}
+
+body.brikpanel-tax .brikpanel-tax-search-icon {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    background-color: var(--bpl-text-placeholder);
+    mask: url(../orders/icons/bp-search.svg) center / contain no-repeat;
+    -webkit-mask: url(../orders/icons/bp-search.svg) center / contain no-repeat;
+    transition: background-color .2s ease;
+}
+
+body.brikpanel-tax .brikpanel-tax-search .search-box:focus-within .brikpanel-tax-search-icon {
+    background-color: var(--bpl-text);
+}
+
+body.brikpanel-tax .brikpanel-tax-search #tag-search-input,
+body.brikpanel-tax .brikpanel-tax-search input[name="s"] {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    height: 28px;
+    min-height: 28px;
+    margin: 0;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--bpl-text);
+    font-size: .8125rem;
+    line-height: 28px;
+    outline: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-search #tag-search-input::placeholder {
+    color: var(--bpl-text-placeholder);
+}
+
+/* The browser's own clear control is replaced by .brikpanel-tax-search-clear. */
+body.brikpanel-tax .brikpanel-tax-search #tag-search-input::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-search .brikpanel-tax-search-clear {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: .375rem;
+    background: transparent;
+    color: var(--bpl-text-placeholder);
+    cursor: pointer;
+    transition: background-color .15s ease, color .15s ease;
+}
+
+body.brikpanel-tax .brikpanel-tax-search .brikpanel-tax-search-clear[hidden] {
+    display: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-search .brikpanel-tax-search-clear:hover {
+    background: #f1f1f1;
+    color: var(--bpl-text);
+}
+
+body.brikpanel-tax .brikpanel-tax-search .brikpanel-tax-search-clear:focus {
+    outline: none;
+    box-shadow: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-search .brikpanel-tax-search-clear:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 1px;
+}
+
+/* Enter submits; the button stays for screen readers and keyboard users. */
+body.brikpanel-tax .brikpanel-tax-search #search-submit:not(:focus) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    border: 0;
+    white-space: nowrap;
+}
+
+body.brikpanel-tax .brikpanel-tax-search #search-submit:focus {
+    height: 24px;
+    min-height: 24px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: .375rem;
+    background: var(--bpl-hover-bg);
+    box-shadow: none;
+    color: var(--bpl-text);
+    font-size: .75rem;
+    font-weight: 550;
+    line-height: 24px;
+    outline: 2px solid var(--bpl-primary);
+}
+
+/* Tree controls (Expand all / Collapse all). */
+body.brikpanel-tax .brikpanel-tree-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+}
+
+body.brikpanel-tax .brikpanel-tree-tools .button {
+    box-sizing: border-box;
+    height: 30px;
+    min-height: 30px;
+    margin: 0;
+    padding: 0 12px;
+    border: 0;
+    border-radius: .5rem;
+    background: var(--bpl-card);
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+    color: var(--bpl-text);
+    font-size: .8125rem;
+    font-weight: 550;
+    line-height: 30px;
+}
+
+body.brikpanel-tax .brikpanel-tree-tools .button:hover {
+    background: var(--bpl-hover-bg);
+    color: var(--bpl-text);
+}
+
+body.brikpanel-tax .brikpanel-tree-tools .button:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+}
+
+body.brikpanel-tax .brikpanel-tree-tools .button:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 2px;
+}
+
+.brikpanel-tree-counter {
+    color: var(--bpl-text-secondary, #616161);
+    font-size: .75rem;
+    white-space: nowrap;
+}
+
+/* The list form and its top navigation (bulk actions and pagination live in
+   the bar and the bottom row instead). */
+body.brikpanel-tax .brikpanel-tax-card #posts-filter {
+    margin: 0;
+    padding: 0;
+    transition: padding-bottom .2s var(--bpl-ease);
+}
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav.top .bulkactions,
+body.brikpanel-tax .brikpanel-tax-card .tablenav.top .tablenav-pages,
+body.brikpanel-tax .brikpanel-tax-card .tablenav.top > br.clear,
+body.brikpanel-tax .brikpanel-tax-card .tablenav.bottom .bulkactions,
+body.brikpanel-tax .brikpanel-tax-card .tablenav.bottom > br.clear {
+    display: none !important;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav.top {
+    height: auto;
+    margin: 0;
+    padding: 8px;
+    border-bottom: 1px solid var(--bpl-border);
+}
+
+/* Collapsed unless a plugin put a visible control in it. WordPress also
+   prints a screen-reader heading there ("Tags list navigation"). */
+body.brikpanel-tax .brikpanel-tax-card .tablenav.top:not(:has(> :not(.bulkactions):not(.tablenav-pages):not(br):not(.clear):not(.screen-reader-text):not(script):not(input[type="hidden"]))) {
+    display: none;
+}
+
+/* ---------- Table ---------------------------------------------------------- */
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table,
+body.brikpanel-tax .brikpanel-tax-card .widefat {
+    width: 100% !important;
+    margin: 0;
+    border: 0;
+    box-shadow: none;
+    /* Auto layout on purpose: plugins (Yoast and others) add columns, and a
+       fixed layout tuned for one column set collapses the name column. */
+    table-layout: auto !important;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table tfoot {
+    display: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table thead th,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table thead td {
+    padding: 8px 12px;
+    border-top: 0;
+    border-bottom: 1px solid var(--bpl-border);
+    background-color: var(--bpl-hover-bg);
+    color: var(--bpl-text-secondary);
+    font-size: .75rem;
+    font-weight: 550;
+    letter-spacing: normal;
+    line-height: 18px;
+    text-transform: none;
+    vertical-align: middle;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table thead th a,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table thead th a span {
+    color: var(--bpl-text-secondary);
+    font-size: .75rem;
+    font-weight: 550;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table thead th.sortable a,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table thead th.sorted a {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table thead th a:hover,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table thead th a:hover span {
+    color: var(--bpl-text);
+}
+
+body.brikpanel-tax .wp-list-table .sortable .sorting-indicators {
+    opacity: 0;
+    transition: opacity .15s;
+}
+
+body.brikpanel-tax .wp-list-table .sortable:hover .sorting-indicators,
+body.brikpanel-tax .wp-list-table .sorted .sorting-indicators {
+    opacity: 1;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody td,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody th {
+    padding: 9px 12px;
+    border-top: 1px solid var(--bpl-border);
+    border-bottom: 0;
+    background-color: transparent;
+    color: var(--bpl-text);
+    font-size: 13px;
+    line-height: 1.45;
+    vertical-align: middle;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody > tr:first-child > td,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody > tr:first-child > th {
+    border-top: 0;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table.striped > tbody > :nth-child(odd),
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .alternate {
+    background-color: transparent;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody > tr:not(.inline-edit-row):not(.no-items):hover > td,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody > tr:not(.inline-edit-row):not(.no-items):hover > th {
+    background-color: #fafafa;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table #the-list > tr:has(> .check-column input:checked) > td,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table #the-list > tr:has(> .check-column input:checked) > th {
+    background-color: var(--bpl-hover-bg);
+}
+
+/* A row that was just added. */
+body.brikpanel-tax .wp-list-table tr.brikpanel-tax-row-new > td,
+body.brikpanel-tax .wp-list-table tr.brikpanel-tax-row-new > th {
+    animation: brikpanel-tax-row-new 1.8s var(--bpl-ease);
+}
+
+@keyframes brikpanel-tax-row-new {
+    0%, 35% { background-color: #e4f5e1; }
+    100% { background-color: transparent; }
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table #the-list .no-items td {
+    padding: 40px 12px;
+    color: var(--bpl-text-secondary);
+    text-align: center;
+}
+
+/* Small fixed-content columns shrink to their content, so the spare width goes
+   to the name and text columns instead of being spread over every column. Not
+   a column-set width: unknown plugin columns stay auto. */
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-thumb,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-posts,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-handle,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-wpseo-score,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-wpseo-score-readability,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-wpseo-cornerstone {
+    width: 1%;
+    white-space: nowrap;
+}
+
+/* Core (.fixed .column-slug 25%) and WooCommerce (.column-name 22%) give the
+   text columns percentage widths meant for a fixed layout. In auto layout
+   they cap those columns and push the spare width into the checkbox column
+   when optional columns are hidden. */
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-name,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-slug,
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-description {
+    width: auto;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-name {
+    min-width: 200px;
+}
+
+/* Checkboxes. */
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column {
+    box-sizing: content-box;
+    width: 16px;
+    padding: 9px 4px 9px 12px;
+    vertical-align: middle;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table thead .check-column {
+    padding: 8px 4px 8px 12px;
+}
+
+.rtl body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column,
+body.rtl.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column {
+    padding-right: 12px;
+    padding-left: 4px;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column input[type="checkbox"] {
+    display: inline-grid;
+    place-items: center;
+    width: 16px;
+    min-width: 16px;
+    height: 16px;
+    margin: 0;
+    border: 0;
+    border-radius: 4px;
+    background-color: #fff;
+    box-shadow: inset 0 0 0 1px var(--bpl-input-border);
+    vertical-align: middle;
+    transition: background-color .12s ease;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column input[type="checkbox"]:checked {
+    background-color: var(--bpl-primary);
+    box-shadow: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column input[type="checkbox"]:checked::before {
+    content: "";
+    float: none;
+    width: 8px;
+    height: 4px;
+    margin: 0;
+    border: solid #fff;
+    border-width: 0 0 2px 2px;
+    transform: translateY(-1px) rotate(-45deg);
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column input[type="checkbox"]:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--bpl-input-border);
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column input[type="checkbox"]:checked:focus {
+    box-shadow: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 2px;
+}
+
+/* WooCommerce's "default category, cannot be deleted" tip, moved into the
+   empty checkbox cell by guardDefaultTermRow(). */
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column .woocommerce-help-tip {
+    position: relative;
+    top: auto;
+    left: auto;
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    color: var(--bpl-text-placeholder);
+    font-size: 16px;
+    line-height: 16px;
+    vertical-align: middle;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table .check-column .woocommerce-help-tip::after {
+    font-size: 16px;
+    line-height: 16px;
+}
+
+/* Name cell and row actions. */
+body.brikpanel-tax .wp-list-table .column-name a.row-title,
+body.brikpanel-tax .wp-list-table .column-name > strong > a {
+    color: var(--bpl-text);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+body.brikpanel-tax .wp-list-table .column-name a.row-title:hover,
+body.brikpanel-tax .wp-list-table .column-name > strong > a:hover {
+    color: var(--bpl-text);
+    text-decoration: underline;
+}
+
+body.brikpanel-tax .wp-list-table .column-name > br {
+    display: none;
+}
+
+/* The actions line keeps its height, so rows never jump on hover; it only
+   fades in. */
+body.brikpanel-tax .brikpanel-tax-card .row-actions {
+    position: static;
+    left: auto;
+    display: block;
+    margin: 2px 0 0;
+    padding: 0;
+    color: var(--bpl-text-secondary, #616161);
+    font-size: 12px;
+    line-height: 18px;
+    opacity: 0;
+    transition: opacity .15s ease;
+}
+
+body.brikpanel-tax .brikpanel-tax-card tr:hover .row-actions,
+body.brikpanel-tax .brikpanel-tax-card tr:focus-within .row-actions,
+body.brikpanel-tax .brikpanel-tax-card .row-actions.visible {
+    opacity: 1;
+}
+
+/* Wide screens with a mouse. The actions keep their own line under the name,
+   as on narrow screens, unless every visible row's links fit beside its name
+   without covering it. Then fitRowActions() (brikpanel-taxonomy-screen.js)
+   sets .brikpanel-tax-actions-inline on the table and they float at the right
+   end of the name cell, so every row is one compact line like the orders
+   list. Up to 3.3.39 they always floated: in longer languages the line grew
+   left past the card edge, which cut off "Edit", and it covered the name. */
+@media screen and (min-width: 1100px) and (hover: hover) {
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody > tr {
+        --bptax-row-bg: #fff;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody > tr:hover {
+        --bptax-row-bg: #fafafa;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody > tr:has(> .check-column input:checked) {
+        --bptax-row-bg: var(--bpl-hover-bg);
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody .column-name {
+        position: relative;
+    }
+
+    /* Under the name the links wrap inside the name cell and never widen the
+       column, so the cell is as wide in both layouts and the measurement
+       cannot flip back and forth. */
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody .row-actions {
+        width: 0;
+        min-width: 100%;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table.brikpanel-tax-actions-inline tbody .row-actions {
+        position: absolute;
+        top: 50%;
+        right: 8px;
+        left: auto;
+        z-index: 2;
+        width: auto;
+        min-width: 0;
+        margin: 0;
+        padding: 4px 4px 4px 32px;
+        background: linear-gradient(to right, rgba(255, 255, 255, 0), var(--bptax-row-bg) 28px);
+        pointer-events: none;
+        transform: translateY(-50%);
+        white-space: nowrap;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table.brikpanel-tax-actions-inline tbody tr:hover .row-actions,
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table.brikpanel-tax-actions-inline tbody tr:focus-within .row-actions,
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table.brikpanel-tax-actions-inline tbody .row-actions.visible {
+        pointer-events: auto;
+    }
+
+    body.rtl.brikpanel-tax .brikpanel-tax-card .wp-list-table.brikpanel-tax-actions-inline tbody .row-actions {
+        right: auto;
+        left: 8px;
+        padding: 4px 32px 4px 4px;
+        background: linear-gradient(to left, rgba(255, 255, 255, 0), var(--bptax-row-bg) 28px);
+    }
+}
+
+/* With the links on their own line the row is taller than its values, so the
+   other cells line up with the name at the top, as in WordPress' own lists,
+   instead of sitting halfway down next to empty space. A wrapped link line
+   breaks between links ("Stel in als standaard" stays in one piece); a link
+   longer than the whole line still wraps inside. */
+@media screen and (min-width: 783px) {
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table:not(.brikpanel-tax-actions-inline) > tbody > tr > td,
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table:not(.brikpanel-tax-actions-inline) > tbody > tr > th {
+        vertical-align: top;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table tbody .row-actions a {
+        display: inline-block;
+    }
+}
+
+body.brikpanel-tax .brikpanel-tax-card .row-actions a,
+body.brikpanel-tax .brikpanel-tax-card .row-actions .button-link {
+    color: var(--bpl-text-secondary);
+    font-size: 12px;
+    text-decoration: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .row-actions a:hover,
+body.brikpanel-tax .brikpanel-tax-card .row-actions .button-link:hover {
+    color: var(--bpl-text);
+    text-decoration: underline;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .row-actions .delete a,
+body.brikpanel-tax .brikpanel-tax-card .row-actions a.delete,
+body.brikpanel-tax .brikpanel-tax-card .row-actions a.delete-tag {
+    color: var(--bpl-error);
+}
+
+body.brikpanel-tax .row-actions a.brikpanel-toplevel,
+body.brikpanel-tax .row-actions a.brikpanel-add-child {
+    color: var(--bpl-text-secondary) !important;
+}
+
+body.brikpanel-tax .row-actions a.brikpanel-toplevel:hover,
+body.brikpanel-tax .row-actions a.brikpanel-add-child:hover {
+    color: var(--bpl-text) !important;
+}
+
+/* Secondary cells. */
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table td.column-slug {
+    color: var(--bpl-text-secondary);
+}
+
+body.brikpanel-tax .brikpanel-tax-card .wp-list-table td.column-description {
+    max-width: 360px;
+    color: var(--bpl-text-secondary);
+}
+
+.brikpanel-desc-text {
+    display: -webkit-box;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+}
+
+.brikpanel-desc-empty {
+    color: var(--bpl-text-secondary, #616161);
+}
+
+/* Count as a small pill. */
+body.brikpanel-tax .wp-list-table th.column-posts,
+body.brikpanel-tax .wp-list-table td.column-posts {
+    width: 1%;
+    text-align: center;
+    white-space: nowrap;
+}
+
+body.brikpanel-tax .wp-list-table td.column-posts a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #f1f1f1;
+    color: var(--bpl-text-secondary);
+    font-size: .75rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 550;
+    text-decoration: none;
+    transition: background-color .15s ease, color .15s ease;
+}
+
+body.brikpanel-tax .wp-list-table td.column-posts a:hover {
+    background: var(--bpl-primary);
+    color: #fff;
+}
+
+/* Term image column. */
+body.brikpanel-tax .wp-list-table .column-thumb {
+    width: 36px;
+}
+
+body.brikpanel-tax .wp-list-table .column-thumb img,
+body.brikpanel-tax .wp-list-table .column-thumb .bpl-tax-thumb {
+    display: block;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--bpl-border);
+    border-radius: .375rem;
+    object-fit: cover;
+}
+
+/* Neutral placeholder when a term has no usable image (instead of a broken
+   image icon). */
+body.brikpanel-tax .wp-list-table .column-thumb .bpl-tax-noimg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--bpl-border);
+    border-radius: .375rem;
+    background: #fafafa;
+    color: #b5b5b5;
+}
+
+body.brikpanel-tax .wp-list-table .column-thumb .bpl-tax-noimg svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+}
+
+/* WooCommerce's term ordering handle. */
+body.brikpanel-tax .wp-list-table .column-handle {
+    width: 24px;
+    color: var(--bpl-text-placeholder);
+}
+
+/* Quick edit. */
+body.brikpanel-tax .inline-edit-row,
+body.brikpanel-tax .inline-edit-row > td {
+    background: var(--bpl-card) !important;
+}
+
+body.brikpanel-tax .inline-edit-row input[type="text"] {
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--bpl-input-border);
+    border-radius: .5rem;
+    box-shadow: none;
+    font-size: .875rem;
+}
+
+body.brikpanel-tax .inline-edit-row input[type="text"]:focus {
+    border-color: var(--bpl-input-focus);
+    box-shadow: 0 0 0 1px var(--bpl-input-focus);
+}
+
+body.brikpanel-tax .inline-edit-row .button {
+    min-height: 32px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: .5rem;
+    background: var(--bpl-card);
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+    color: var(--bpl-text);
+    font-weight: 550;
+}
+
+body.brikpanel-tax .inline-edit-row .button-primary {
+    background: var(--bpl-primary);
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .2), inset 0 1px 0 rgba(255, 255, 255, .1);
+    color: #fff;
+}
+
+/* A compact form instead of inputs stretched across the whole table. */
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row > td {
+    padding: 16px 12px 16px 44px !important;
+}
+
+body.rtl.brikpanel-tax .brikpanel-tax-card .inline-edit-row > td {
+    padding: 16px 44px 16px 12px !important;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row .inline-edit-wrapper {
+    max-width: 560px;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row fieldset,
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row .inline-edit-col {
+    float: none;
+    width: auto;
+    margin: 0;
+    padding: 0;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row .inline-edit-legend {
+    display: block;
+    margin: 0 0 12px;
+    padding: 0;
+    color: var(--bpl-text);
+    font-size: .875rem;
+    font-weight: 600;
+    text-transform: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row fieldset label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: none;
+    margin: 0 0 8px;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row fieldset label .title {
+    flex: 0 0 72px;
+    width: 72px;
+    margin: 0;
+    color: var(--bpl-text-secondary);
+    font-size: .8125rem;
+    font-style: normal;
+    line-height: 1.4;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row fieldset label .input-text-wrap {
+    flex: 1 1 auto;
+    margin: 0;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row fieldset label .input-text-wrap input {
+    width: 100%;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row .inline-edit-save {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 12px 0 0 84px;
+    padding: 0;
+}
+
+body.rtl.brikpanel-tax .brikpanel-tax-card .inline-edit-row .inline-edit-save {
+    margin: 12px 84px 0 0;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row .inline-edit-save .spinner {
+    float: none;
+    margin: 0;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .inline-edit-row .inline-edit-save .notice {
+    flex-basis: 100%;
+    margin: 4px 0 0;
+}
+
+@media screen and (max-width: 782px) {
+    body.brikpanel-tax .brikpanel-tax-card .inline-edit-row > td,
+    body.rtl.brikpanel-tax .brikpanel-tax-card .inline-edit-row > td {
+        padding: 16px 12px !important;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .inline-edit-row fieldset label {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .inline-edit-row fieldset label .title {
+        flex-basis: auto;
+        width: auto;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .inline-edit-row .inline-edit-save,
+    body.rtl.brikpanel-tax .brikpanel-tax-card .inline-edit-row .inline-edit-save {
+        margin: 12px 0 0;
+    }
+}
+
+/* ---------- Footnote under the table card ---------------------------------- */
+
+body.brikpanel-tax .brikpanel-tax-footnote {
+    margin: 12px 4px 0;
+    color: var(--bpl-text-secondary);
+    font-size: .75rem;
+    line-height: 1.5;
+}
+
+body.brikpanel-tax .brikpanel-tax-footnote .form-wrap,
+body.brikpanel-tax .brikpanel-tax-footnote .edit-term-notes {
+    margin: 0;
+    padding: 0;
+}
+
+body.brikpanel-tax .brikpanel-tax-footnote p {
+    margin: 0 0 4px;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
+}
+
+body.brikpanel-tax .brikpanel-tax-footnote p > strong:first-child {
+    color: var(--bpl-text);
+    font-weight: 600;
+}
+
+/* "Note:" and its sentence on one line. */
+body.brikpanel-tax .brikpanel-tax-footnote p > strong:first-child + br {
+    display: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-footnote a {
+    color: var(--bpl-text);
+}
+
+/* ---------- Pagination ----------------------------------------------------- */
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav.bottom {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    height: auto;
+    min-height: 45px;
+    margin: 0;
+    padding: 8px 12px;
+    border-top: 1px solid var(--bpl-border);
+    background: var(--bpl-card);
+}
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav.bottom:not(:has(.tablenav-pages)) {
+    display: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav-pages {
+    display: flex;
+    float: none;
+    align-items: center;
+    margin: 0;
+    color: var(--bpl-text);
+}
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav-pages .displaying-num {
+    margin: 0 12px 0 0;
+    color: var(--bpl-text-secondary);
+    font-size: .8125rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.rtl .brikpanel-tax-card .tablenav-pages .displaying-num {
+    margin: 0 0 0 12px;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .pagination-links {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 28px;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav-pages.one-page .pagination-links {
+    display: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav-pages .button,
+body.brikpanel-tax .brikpanel-tax-card .tablenav-pages .tablenav-pages-navspan {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    min-height: 28px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: .5rem;
+    background: transparent;
+    box-shadow: none;
+    transition: background-color .15s ease;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav-pages a.button:hover,
+body.brikpanel-tax .brikpanel-tax-card .tablenav-pages a.button:focus {
+    background: #f1f1f1;
+    box-shadow: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .tablenav-pages a.button:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 1px;
+}
+
+body.brikpanel-tax .brikpanel-tax-chevron {
+    display: block;
+    width: 16px;
+    height: 16px;
+    background-color: var(--bpl-text-secondary);
+    mask: url(../orders/icons/bp-chevron.svg) center / contain no-repeat;
+    -webkit-mask: url(../orders/icons/bp-chevron.svg) center / contain no-repeat;
+}
+
+body.brikpanel-tax .brikpanel-tax-chevron.is-double-left,
+body.brikpanel-tax .brikpanel-tax-chevron.is-double-right {
+    mask-image: url(../orders/icons/bp-chevron-double.svg);
+    -webkit-mask-image: url(../orders/icons/bp-chevron-double.svg);
+}
+
+body.brikpanel-tax .brikpanel-tax-chevron.is-left,
+body.brikpanel-tax .brikpanel-tax-chevron.is-double-left {
+    transform: scaleX(-1);
+}
+
+.rtl .brikpanel-tax-chevron.is-right,
+.rtl .brikpanel-tax-chevron.is-double-right {
+    transform: scaleX(-1);
+}
+
+.rtl .brikpanel-tax-chevron.is-left,
+.rtl .brikpanel-tax-chevron.is-double-left {
+    transform: none;
+}
+
+body.brikpanel-tax .tablenav-pages .disabled .brikpanel-tax-chevron,
+body.brikpanel-tax .tablenav-pages .disabled.brikpanel-tax-chevron {
+    background-color: #c7c7c7;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .paging-input {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    padding: 0 6px;
+    color: var(--bpl-text);
+    font-size: .8125rem;
+    font-variant-numeric: tabular-nums;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .paging-input .current-page {
+    box-sizing: border-box;
+    width: 36px;
+    min-height: 26px;
+    height: 26px;
+    margin: 0;
+    padding: 0 4px;
+    border: 1px solid var(--bpl-border);
+    border-radius: .375rem;
+    box-shadow: none;
+    font-size: .8125rem;
+    text-align: center;
+}
+
+body.brikpanel-tax .brikpanel-tax-card .paging-input .current-page:focus {
+    border-color: var(--bpl-input-focus);
+    box-shadow: 0 0 0 1px var(--bpl-input-focus);
+}
+
+/* ---------- Bulk action bar ------------------------------------------------ */
+
+/* A zero-height sticky anchor at the end of the list form. The bar hangs
+   below it, so it rides 16px above the bottom of the window while the table is
+   long, and settles into the space the card opens under the pagination. */
+body.brikpanel-tax .brikpanel-tax-bulk {
+    position: sticky;
+    bottom: 72px;
+    z-index: 20;
+    height: 0;
+    pointer-events: none;
+}
+
+body.brikpanel-tax .brikpanel-tax-bulk-inner {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: calc(100vw - 48px);
+    padding: 8px;
+    overflow-x: auto;
+    border-radius: .75rem;
+    background-color: #fff;
+    box-shadow: 0 8px 24px -6px rgba(26, 26, 26, .2), 0 0 0 1px rgba(0, 0, 0, .06);
+    opacity: 0;
+    scrollbar-width: thin;
+    transform: translate(-50%, 8px);
+    visibility: hidden;
+    transition: opacity .18s ease, transform .22s var(--bpl-ease), visibility 0s linear .22s;
+}
+
+body.brikpanel-tax .brikpanel-tax-bulk.is-visible .brikpanel-tax-bulk-inner {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, 0);
+    visibility: visible;
+    transition: opacity .18s ease, transform .22s var(--bpl-ease), visibility 0s;
+}
+
+body.brikpanel-tax .brikpanel-tax-card.has-selection #posts-filter {
+    padding-bottom: 64px;
+}
+
+body.brikpanel-tax .brikpanel-tax-bulk-inner > * {
+    flex-shrink: 0;
+}
+
+body.brikpanel-tax .brikpanel-tax-bulk .brikpanel-bulk-count {
+    padding: 0 8px 0 6px;
+    color: var(--bpl-text);
+    font-size: .8125rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 550;
+    white-space: nowrap;
+}
+
+body.brikpanel-tax .brikpanel-tax-bulk button {
+    padding: 6px 12px;
+    border: 0;
+    border-radius: .5rem;
+    background-color: #fff;
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+    color: var(--bpl-text);
+    cursor: pointer;
+    font-size: .8125rem;
+    font-weight: 550;
+    line-height: 18px;
+    white-space: nowrap;
+    transition: background-color .15s ease;
+}
+
+body.brikpanel-tax .brikpanel-tax-bulk button:hover {
+    background-color: var(--bpl-hover-bg);
+}
+
+body.brikpanel-tax .brikpanel-tax-bulk button:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 2px;
+}
+
+body.brikpanel-tax .brikpanel-tax-bulk button.is-destructive {
+    color: var(--bpl-error);
+}
+
+/* ---------- Add panel ------------------------------------------------------ */
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    inset-inline-end: 0;
+    z-index: 100020;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    float: none;
+    width: 440px;
+    max-width: 100vw;
+    margin: 0;
+    padding: 0;
+    border-inline-start: 1px solid var(--bpl-border);
+    background: var(--bpl-card);
+    box-shadow: -12px 0 32px -12px rgba(26, 26, 26, .18);
+    color: var(--bpl-text);
+    outline: none;
+    transform: translateX(100%);
+    visibility: hidden;
+}
+
+.rtl #col-left.brikpanel-tax-panel,
+body.rtl.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel {
+    box-shadow: 12px 0 32px -12px rgba(26, 26, 26, .18);
+    transform: translateX(-100%);
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel.is-open {
+    transform: none;
+    visibility: visible;
+}
+
+body.brikpanel-tax-motion #col-left.brikpanel-tax-panel {
+    transition: transform .28s var(--bpl-ease), visibility 0s linear .28s;
+}
+
+body.brikpanel-tax-motion #col-left.brikpanel-tax-panel.is-open {
+    transition: transform .34s var(--bpl-ease), visibility 0s;
+}
+
+.brikpanel-tax-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100019;
+    background: rgba(26, 26, 26, .28);
+    opacity: 0;
+    visibility: hidden;
+}
+
+.brikpanel-tax-backdrop.is-open {
+    opacity: 1;
+    visibility: visible;
+}
+
+body.brikpanel-tax-motion .brikpanel-tax-backdrop {
+    transition: opacity .28s ease, visibility 0s linear .28s;
+}
+
+body.brikpanel-tax-motion .brikpanel-tax-backdrop.is-open {
+    transition: opacity .28s ease, visibility 0s;
+}
+
+/* Pop-ups that a field in the panel opens at the end of <body> come above
+   the panel. Blocksy Pro's colour picker (swatch fields on attribute terms)
+   is fixed at z-index 100000, so it opened out of sight under the panel and
+   the backdrop, and no colour could be picked (wp.org report, 2026-10-27).
+   A foreign element on purpose: the selector has to outrank Blocksy's own
+   `.ct-option-modal` rule, and it only applies while the panel is open. */
+body.brikpanel-tax-panel-open .ct-option-modal {
+    z-index: 100021;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .brikpanel-tax-panel-head {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px 14px 20px;
+    border-bottom: 1px solid var(--bpl-border);
+}
+
+.rtl .brikpanel-tax-panel-head {
+    padding: 14px 20px 14px 16px !important;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .brikpanel-tax-panel-head h2 {
+    margin: 0;
+    padding: 0;
+    color: var(--bpl-text);
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .brikpanel-tax-panel-close {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: .5rem;
+    background: transparent;
+    color: var(--bpl-text-secondary);
+    cursor: pointer;
+    transition: background-color .15s ease, color .15s ease;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .brikpanel-tax-panel-close:hover {
+    background: #f1f1f1;
+    color: var(--bpl-text);
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .brikpanel-tax-panel-close:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 1px;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .brikpanel-tax-panel-body {
+    box-sizing: border-box;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    margin: 0;
+    padding: 20px 20px 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+/* Help text added by themes and plugins (WoodMart's own fields use italics)
+   reads the same as core's. */
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel.brikpanel-tax-panel .brikpanel-tax-panel-body p,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel.brikpanel-tax-panel .brikpanel-tax-panel-body .description {
+    font-style: normal;
+}
+
+/* Intro copy ("Brands can be added and managed …", the attribute term note). */
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .brikpanel-tax-panel-body > p,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-wrap > p {
+    display: block;
+    margin: 0 0 12px;
+    padding: 0;
+    color: var(--bpl-text-secondary);
+    font-size: .8125rem;
+    line-height: 1.5;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-wrap,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-wrap > form {
+    display: flex;
+    flex: 1 0 auto;
+    flex-direction: column;
+    margin: 0;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-wrap > form {
+    box-sizing: border-box;
+    padding: 4px 0 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+/* Fields. */
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field {
+    margin: 0 0 16px;
+    padding: 0;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field label {
+    display: block;
+    margin: 0 0 6px !important;
+    padding: 0;
+    border: 0;
+    color: var(--bpl-text);
+    cursor: default;
+    font-size: .8125rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field label:has(> input[type="checkbox"]) {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field p,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field .description {
+    margin: 6px 0 0 !important;
+    padding: 0;
+    color: var(--bpl-text-secondary);
+    font-size: .75rem;
+    font-style: normal;
+    line-height: 1.5;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="text"],
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="number"],
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="url"],
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="email"],
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field select,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field textarea {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+    height: 36px;
+    min-height: 36px;
+    margin: 0;
+    padding: 0 .75rem;
+    border: 1px solid var(--bpl-input-border);
+    border-radius: .5rem;
+    background-color: var(--bpl-card);
+    box-shadow: none;
+    color: var(--bpl-text);
+    font-size: .875rem;
+    line-height: 1.5;
+    outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field select {
+    padding-right: 2rem;
+}
+
+/* WoodMart caps selects and textareas with a selector one class stronger
+   than the rules above (`:is(input[type=text],select,textarea)` counts as an
+   attribute selector even for a select). */
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel.brikpanel-tax-panel .form-field select,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel.brikpanel-tax-panel .form-field textarea,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card.brikpanel-tax-edit-card .form-table td select,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card.brikpanel-tax-edit-card .form-table td > textarea {
+    width: 100%;
+    max-width: none;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel.brikpanel-tax-panel .form-field textarea {
+    min-height: 96px;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field textarea {
+    height: auto;
+    min-height: 96px;
+    padding: .5rem .75rem;
+    resize: vertical;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="text"]:hover:not(:focus),
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field select:hover:not(:focus),
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field textarea:hover:not(:focus) {
+    border-color: var(--bpl-input-border);
+    box-shadow: none;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="text"]:focus,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="number"]:focus,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="url"]:focus,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="email"]:focus,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field select:focus,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field textarea:focus {
+    border-color: var(--bpl-input-focus);
+    box-shadow: 0 0 0 1px var(--bpl-input-focus);
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-invalid input,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-invalid select,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-invalid textarea {
+    border-color: var(--bpl-error);
+    box-shadow: 0 0 0 1px var(--bpl-error);
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="checkbox"] {
+    position: static;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    border: 1px solid var(--bpl-input-border);
+    border-radius: 4px;
+    box-shadow: none;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="checkbox"]:checked {
+    border-color: var(--bpl-primary);
+    background-color: var(--bpl-primary);
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field input[type="checkbox"]:checked::before {
+    content: "";
+    float: none;
+    width: 8px;
+    height: 4px;
+    margin: 4px 0 0 3px;
+    border: solid #fff;
+    border-width: 0 0 2px 2px;
+    transform: rotate(-45deg);
+}
+
+/* WooCommerce term image field. */
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field img {
+    border: 1px solid var(--bpl-border);
+    border-radius: .5rem;
+    object-fit: cover;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field .button:not(.button-primary) {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    min-height: 32px;
+    margin: 0 4px 4px 0;
+    padding: 0 12px;
+    border: 0;
+    border-radius: .5rem;
+    background: var(--bpl-card);
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+    color: var(--bpl-text) !important;
+    font-size: .8125rem;
+    font-weight: 550;
+    line-height: 1;
+    vertical-align: middle;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel .form-field .button:not(.button-primary):hover {
+    background: var(--bpl-hover-bg);
+}
+
+/* Footer: Cancel + the form's own submit, always at the bottom of the panel. */
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit.brikpanel-tax-panel-foot {
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    margin: auto -20px 0;
+    padding: 12px 20px;
+    border: 0;
+    border-top: 1px solid var(--bpl-border);
+    background: var(--bpl-card);
+}
+
+/* Themes (WoodMart) draw an icon glyph over the submit button. */
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit.brikpanel-tax-panel-foot::before {
+    content: none;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit.brikpanel-tax-panel-foot .spinner {
+    order: -1;
+    float: none;
+    margin: 0 auto 0 0;
+}
+
+.rtl .brikpanel-tax-panel-foot .spinner {
+    margin: 0 0 0 auto !important;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit .button,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit .button-primary,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit [type="submit"] {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 34px;
+    min-height: 34px;
+    margin: 0;
+    padding: 0 16px;
+    border: 0;
+    border-radius: .5rem;
+    font-size: .8125rem;
+    font-weight: 550;
+    line-height: 1;
+    text-shadow: none;
+    transition: background-color .15s ease;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit .brikpanel-tax-panel-cancel {
+    background: var(--bpl-card);
+    box-shadow: inset 0 0 0 1px var(--bpl-border), 0 1px 0 rgba(0, 0, 0, .05);
+    color: var(--bpl-text) !important;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit .brikpanel-tax-panel-cancel:hover {
+    background: var(--bpl-hover-bg);
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit .button-primary,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit [type="submit"] {
+    background: var(--bpl-primary);
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .2), inset 0 1px 0 rgba(255, 255, 255, .1);
+    color: #fff !important;
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit .button-primary:hover,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit [type="submit"]:hover {
+    background: var(--bpl-primary-hover);
+}
+
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit .button:focus-visible,
+body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel p.submit [type="submit"]:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 2px;
+}
+
+/* ---------- Attributes table ----------------------------------------------- */
+
+body.brikpanel-tax .attributes-table td.column-name strong a {
+    color: var(--bpl-text);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+body.brikpanel-tax .attributes-table td.column-name strong a:hover {
+    text-decoration: underline;
+}
+
+body.brikpanel-tax .attributes-table td.column-slug,
+body.brikpanel-tax .attributes-table td.column-type,
+body.brikpanel-tax .attributes-table td.column-orderby {
+    color: var(--bpl-text-secondary);
+    white-space: nowrap;
+}
+
+body.brikpanel-tax .attributes-table td.column-terms {
+    min-width: 200px;
+    color: var(--bpl-text-secondary);
+}
+
+body.brikpanel-tax .brikpanel-attr-terms {
+    display: -webkit-box;
+    max-width: 560px;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+body.brikpanel-tax .attributes-table .configure-terms {
+    display: inline-block;
+    margin-top: 2px;
+    color: var(--bpl-text);
+    font-size: .75rem;
+    font-weight: 550;
+    text-decoration: none;
+}
+
+body.brikpanel-tax .attributes-table .configure-terms:hover {
+    text-decoration: underline;
+}
+
+/* ---------- Edit screens (term.php, attribute edit) ------------------------ */
+
+body.brikpanel-tax #wpbody-content > #brikpanel-tax-edit {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+/* WoodMart turns the attribute edit form into a 600px flex column (it orders
+   its own box after the form table, so the flex stays) and stacks every row
+   with 40px gaps; keep the full card width and the two-column form table. */
+body.brikpanel-tax #brikpanel-tax-edit form.brikpanel-tax-edit-card {
+    max-width: none;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table tr,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table tr.form-field {
+    display: table-row;
+    margin: 0;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table th,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td {
+    display: table-cell;
+    margin: 0;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td input[type="checkbox"] {
+    position: static;
+    margin: 0;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card p.submit::before,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .edit-tag-actions::before {
+    content: none;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card {
+    box-sizing: border-box;
+    margin: 0 0 16px;
+    padding: 4px 24px 20px;
+    border: 1px solid var(--bpl-border);
+    border-radius: .75rem;
+    background: var(--bpl-card);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table {
+    margin: 0;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table > tbody > tr {
+    border-bottom: 1px solid #f1f1f1;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table > tbody > tr:last-child {
+    border-bottom: 0;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table th {
+    width: 180px;
+    padding: 20px 16px 16px 0;
+    color: var(--bpl-text);
+    font-size: .8125rem;
+    font-weight: 600;
+    vertical-align: top;
+}
+
+.rtl .brikpanel-tax-edit-card .form-table th {
+    padding: 20px 0 16px 16px !important;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table th label {
+    margin: 0 !important;
+    padding: 0;
+    border: 0;
+    color: var(--bpl-text);
+    font-size: .8125rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td {
+    padding: 12px 0;
+    color: var(--bpl-text);
+    font-size: .8125rem;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td input[type="text"],
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td input[type="number"],
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td input[type="url"],
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td select,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td > textarea {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+    height: 36px;
+    min-height: 36px;
+    margin: 0;
+    padding: 0 .75rem;
+    border: 1px solid var(--bpl-input-border);
+    border-radius: .5rem;
+    background-color: var(--bpl-card);
+    box-shadow: none;
+    color: var(--bpl-text);
+    font-size: .875rem;
+    line-height: 1.5;
+    outline: none;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td > textarea {
+    height: auto;
+    min-height: 120px;
+    padding: .5rem .75rem;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td input[type="text"]:focus,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td input[type="number"]:focus,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td input[type="url"]:focus,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td select:focus,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td > textarea:focus {
+    border-color: var(--bpl-input-focus);
+    box-shadow: 0 0 0 1px var(--bpl-input-focus);
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td .description,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td p {
+    margin: 6px 0 0 !important;
+    color: var(--bpl-text-secondary);
+    font-size: .75rem;
+    font-style: normal;
+    line-height: 1.5;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .edit-tag-actions,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card p.submit {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 8px 0 0;
+    padding: 16px 0 0;
+    border-top: 1px solid var(--bpl-border);
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .edit-tag-actions [type="submit"],
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card p.submit [type="submit"] {
+    box-sizing: border-box;
+    height: 34px;
+    min-height: 34px;
+    margin: 0;
+    padding: 0 16px;
+    border: 0;
+    border-radius: .5rem;
+    background: var(--bpl-primary);
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .2), inset 0 1px 0 rgba(255, 255, 255, .1);
+    color: #fff !important;
+    font-size: .8125rem;
+    font-weight: 550;
+    line-height: 1;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .edit-tag-actions [type="submit"]:hover,
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card p.submit [type="submit"]:hover {
+    background: var(--bpl-primary-hover);
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .edit-tag-actions #delete-link {
+    order: 2;
+    margin: 0;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .edit-tag-actions #delete-link a {
+    color: var(--bpl-error);
+    font-size: .8125rem;
+    font-weight: 550;
+    text-decoration: none;
+}
+
+body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .edit-tag-actions #delete-link a:hover {
+    text-decoration: underline;
+}
+
+/* ---------- Folder-style category tree ------------------------------------- */
+
+/* The JS replaces WordPress' em-dash prefix with indent steps, an elbow, a
+   twisty, a folder icon and a child counter. Only decorated rows are touched.
+   WordPress prints the name as <th> (older versions <td>), so the selector
+   does not name the element. */
+body.brikpanel-tax .wp-list-table tr.brikpanel-tree-row .column-name > strong {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+}
+
+body.brikpanel-tax .wp-list-table tr.brikpanel-tree-row .column-name > strong > a.row-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.brikpanel-tree-pre {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+}
+
+.brikpanel-tree-indent {
+    position: relative;
+    flex: 0 0 auto;
+    width: 1.5rem;
+    height: 1.25rem;
+}
+
+.brikpanel-tree-indent.is-connector::before {
+    content: "";
+    position: absolute;
+    top: -.625rem;
+    bottom: 50%;
+    left: .625rem;
+    border-left: 1px solid var(--bpl-border);
+}
+
+.brikpanel-tree-indent.is-connector::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    right: .25rem;
+    left: .625rem;
+    border-top: 1px solid var(--bpl-border);
+}
+
+.brikpanel-tree-toggle {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    padding: 0;
+    border: 0;
+    border-radius: .25rem;
+    background: none;
+    color: var(--bpl-text-secondary);
+    cursor: pointer;
+    transform: rotate(90deg);
+    transition: background .15s, transform .15s ease;
+}
+
+.brikpanel-tree-toggle.is-collapsed {
+    transform: rotate(0deg);
+}
+
+.brikpanel-tree-toggle:hover {
+    background: var(--bpl-border);
+    color: var(--bpl-text);
+}
+
+.brikpanel-tree-toggle:focus-visible {
+    outline: 2px solid var(--bpl-primary);
+    outline-offset: 1px;
+}
+
+.brikpanel-tree-toggle.is-leaf {
+    background: none;
+    cursor: default;
+    transform: none;
+}
+
+.brikpanel-tree-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin-right: .25rem;
+    color: var(--bpl-text-placeholder);
+}
+
+.brikpanel-tree-branch .brikpanel-tree-icon {
+    color: var(--bpl-text-secondary);
+}
+
+.brikpanel-tree-kids {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    height: 1.125rem;
+    margin-left: .5rem;
+    padding: 0 .375rem;
+    border-radius: 1rem;
+    background: #f1f1f1;
+    color: var(--bpl-text-secondary);
+    font-size: .6875rem;
+    font-weight: 550;
+    line-height: 1;
+}
+
+body.brikpanel-tax .wp-list-table tr.brikpanel-tree-hidden {
+    display: none;
+}
+
+body.brikpanel-tax .wp-list-table tr.brikpanel-tree-empty td {
+    padding: 1.25rem 1rem !important;
+    color: var(--bpl-text-secondary, #616161);
+    text-align: center;
+}
+
+/* ---------- Drag & drop nesting -------------------------------------------- */
+
+.brikpanel-cat-drag-handle {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 1.125rem;
+    height: 1.25rem;
+    border-radius: .25rem;
+    color: var(--bpl-text-placeholder);
+    cursor: grab;
+    opacity: 0;
+    transition: opacity .15s, color .15s;
+    user-select: none;
+}
+
+tr:hover .brikpanel-cat-drag-handle,
+.brikpanel-cat-drag-handle:focus-visible {
+    opacity: 1;
+}
+
+.brikpanel-cat-drag-handle:hover {
+    color: var(--bpl-text);
+}
+
+.brikpanel-cat-drag-handle:active {
+    cursor: grabbing;
+}
+
+.brikpanel-cat-dragging {
+    opacity: .4;
+}
+
+body.brikpanel-tax .wp-list-table tr.brikpanel-cat-drop-target > td,
+body.brikpanel-tax .wp-list-table tr.brikpanel-cat-drop-target > th {
+    border-top-color: var(--bpl-primary) !important;
+    background: var(--bpl-hover-bg) !important;
+    box-shadow: inset 0 -2px 0 var(--bpl-primary);
+}
+
+body.brikpanel-tax .wp-list-table tr.brikpanel-cat-drop-denied > td,
+body.brikpanel-tax .wp-list-table tr.brikpanel-cat-drop-denied > th {
+    background: #fdf1ef !important;
+    cursor: not-allowed;
+}
+
+/* "Move to top level" strip, only while dragging. */
+.brikpanel-tree-droproot {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    height: 2.5rem;
+    margin: 8px;
+    border: 1px dashed var(--bpl-input-border);
+    border-radius: .5rem;
+    background: var(--bpl-hover-bg);
+    color: var(--bpl-text-secondary);
+    font-size: .8125rem;
+    font-weight: 550;
+}
+
+body.brikpanel-cat-dnd .brikpanel-tree-droproot {
+    display: flex;
+}
+
+.brikpanel-tree-droproot.is-over {
+    border-style: solid;
+    border-color: var(--bpl-primary);
+    color: var(--bpl-text);
+}
+
+.brikpanel-cat-saving {
+    opacity: .5;
+    pointer-events: none;
+}
+
+/* ---------- Toast ---------------------------------------------------------- */
+
+.brikpanel-cat-toast-container {
+    position: fixed;
+    top: 44px;
+    right: 20px;
+    z-index: 999999;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    pointer-events: none;
+}
+
+.rtl .brikpanel-cat-toast-container {
+    right: auto;
+    left: 20px;
+}
+
+/* Beside the open add panel, not over its close button. */
+body.brikpanel-tax-panel-open .brikpanel-cat-toast-container {
+    right: 460px;
+}
+
+body.rtl.brikpanel-tax-panel-open .brikpanel-cat-toast-container {
+    right: auto;
+    left: 460px;
+}
+
+@media screen and (max-width: 600px) {
+    body.brikpanel-tax-panel-open .brikpanel-cat-toast-container,
+    body.rtl.brikpanel-tax-panel-open .brikpanel-cat-toast-container {
+        top: auto;
+        right: 12px;
+        bottom: 76px;
+        left: 12px;
+        align-items: center;
+    }
+}
+
+.brikpanel-cat-toast {
+    max-width: 360px;
+    padding: .625rem 1rem;
+    border-radius: .5rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .12);
+    font-size: .8125rem;
+    font-weight: 550;
+    pointer-events: auto;
+    transform: translateX(110%);
+    transition: transform .3s var(--bpl-ease);
+}
+
+.rtl .brikpanel-cat-toast {
+    transform: translateX(-110%);
+}
+
+.brikpanel-cat-toast.show {
+    transform: translateX(0);
+}
+
+/* State classes are is-*: a bare `error` makes WordPress style the toast as an
+   admin notice (div.error padding and margin, no shadow). */
+.brikpanel-cat-toast.is-success {
+    border: 1px solid #b7e1b0;
+    background: #e4f5e1;
+    color: #1a6b15;
+}
+
+.brikpanel-cat-toast.is-error {
+    border: 1px solid #f1b0b0;
+    background: #fce4e4;
+    color: #c62828;
+}
+
+/* ---------- Tablet & phone (WordPress' list table cards, <= 782px) --------- */
+
+@media screen and (max-width: 782px) {
+    body.brikpanel-tax #wpbody-content > .wrap {
+        padding: 0 12px;
+    }
+
+    body.brikpanel-tax .brikpanel-page-top {
+        margin: 12px 0;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-search {
+        flex-basis: 100%;
+        max-width: none;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-toolbar-tools {
+        flex-wrap: wrap;
+        margin-inline-start: 0;
+    }
+
+    /* Core shows row actions on touch screens. */
+    body.brikpanel-tax .brikpanel-tax-card .row-actions {
+        opacity: 1;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-primary .toggle-row {
+        top: 6px;
+        width: 40px;
+        height: 40px;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table td.column-primary,
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table th.column-primary {
+        padding-inline-end: 50px;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table tr:not(.inline-edit-row):not(.no-items) td:not(.column-primary):not(.check-column)::before {
+        color: var(--bpl-text-secondary);
+        font-size: .75rem;
+        font-weight: 550;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table tr:not(.inline-edit-row):not(.no-items) .column-primary ~ td:not(.check-column) {
+        border-top: 0;
+    }
+
+    /* Image column carries little value in a card head. */
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table .column-thumb,
+    body.brikpanel-tax .brikpanel-tax-card .wp-list-table .is-expanded td.column-thumb {
+        display: none !important;
+    }
+
+    body.brikpanel-tax .wp-list-table td.column-posts {
+        width: auto;
+        text-align: left;
+    }
+
+    .rtl .brikpanel-tax-card .wp-list-table td.column-posts {
+        text-align: right;
+    }
+
+    /* Dragging needs a mouse; Quick Edit still sets the parent. */
+    body.brikpanel-tax .brikpanel-cat-drag-handle {
+        display: none !important;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .tablenav.bottom {
+        justify-content: center;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .tablenav-pages .button,
+    body.brikpanel-tax .brikpanel-tax-card .tablenav-pages .tablenav-pages-navspan {
+        width: 36px;
+        min-width: 36px;
+        height: 36px;
+        min-height: 36px;
+    }
+
+    body.brikpanel-tax .brikpanel-tax-card .pagination-links {
+        height: 36px;
+    }
+
+    /* The attributes table has no expand toggle: every cell shows, labelled. */
+    body.brikpanel-tax .attributes-table thead {
+        display: none;
+    }
+
+    body.brikpanel-tax .attributes-table,
+    body.brikpanel-tax .attributes-table tbody,
+    body.brikpanel-tax .attributes-table tbody tr {
+        display: block;
+        width: 100%;
+    }
+
+    body.brikpanel-tax .attributes-table tbody tr:not(.no-items) td:not(.hidden) {
+        position: relative;
+        display: block;
+        width: auto !important;
+        /* Logical sides: the column label sits at the start edge in both
+           directions. Physical left/right put it under the value on RTL
+           stores (Persian customer, 2026-09-17). */
+        padding: 4px 12px !important;
+        padding-inline-start: 38% !important;
+        border-top: 0 !important;
+    }
+
+    body.brikpanel-tax .attributes-table tbody tr:not(.no-items) td.column-name {
+        padding: 12px !important;
+        border-top: 1px solid var(--bpl-border) !important;
+    }
+
+    body.brikpanel-tax .attributes-table tbody tr:not(.no-items) td.column-name::before {
+        content: none;
+    }
+
+    body.brikpanel-tax .attributes-table tbody tr:first-child td.column-name {
+        border-top: 0 !important;
+    }
+
+    body.brikpanel-tax .attributes-table tbody tr:not(.no-items) td:last-child {
+        padding-bottom: 12px !important;
+    }
+
+    body.brikpanel-tax .attributes-table tbody tr:not(.no-items) td:not(.column-name)::before {
+        content: attr(data-colname);
+        position: absolute;
+        inset-inline-start: 12px;
+        inset-inline-end: auto;
+        width: 32%;
+        overflow: hidden;
+        color: var(--bpl-text-secondary);
+        font-size: .75rem;
+        font-weight: 550;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    body.brikpanel-tax .attributes-table td.column-slug,
+    body.brikpanel-tax .attributes-table td.column-type,
+    body.brikpanel-tax .attributes-table td.column-orderby {
+        white-space: normal;
+    }
+
+    body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card {
+        padding: 4px 16px 16px;
+    }
+
+    body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table tr,
+    body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table tr.form-field {
+        display: block;
+    }
+
+    body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table th {
+        display: block;
+        width: auto;
+        padding: 16px 0 0;
+    }
+
+    body.brikpanel-tax #brikpanel-tax-edit .brikpanel-tax-edit-card .form-table td {
+        display: block;
+        padding: 8px 0 16px;
+    }
+}
+
+@media screen and (max-width: 600px) {
+    body.brikpanel-tax-has-panel #col-left.brikpanel-tax-panel {
+        width: 100vw;
+        border: 0;
+    }
+
+    body.brikpanel-tax .brikpanel-page-actions .page-title-action {
+        padding: 0 12px;
+    }
+}
+
+/* ---------- Reduced motion ------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+    body.brikpanel-tax-motion #col-left.brikpanel-tax-panel,
+    body.brikpanel-tax-motion #col-left.brikpanel-tax-panel.is-open,
+    body.brikpanel-tax-motion .brikpanel-tax-backdrop,
+    body.brikpanel-tax-motion .brikpanel-tax-backdrop.is-open,
+    body.brikpanel-tax .brikpanel-tax-bulk-inner,
+    body.brikpanel-tax .brikpanel-tax-card .row-actions,
+    .brikpanel-cat-toast {
+        transition: none;
+    }
+
+    body.brikpanel-tax .wp-list-table tr.brikpanel-tax-row-new > td,
+    body.brikpanel-tax .wp-list-table tr.brikpanel-tax-row-new > th {
+        animation: none;
+    }
+}

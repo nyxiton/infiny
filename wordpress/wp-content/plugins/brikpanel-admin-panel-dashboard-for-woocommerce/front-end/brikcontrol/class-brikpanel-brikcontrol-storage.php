@@ -1,0 +1,504 @@
+<?php
+/**
+ * BrikPanel — BrikControl Storage
+ *
+ * Thin persistence wrapper around options / transients / user meta for the
+ * BrikControl health panel. Centralises the storage keys so callers never
+ * touch raw option names — that lets us version the schema and migrate in
+ * one place.
+ *
+ * Stored shapes:
+ *   - results       (option, autoload=no): full per-check report bundle. Since
+ *                                          3.3.25 a check stores figures
+ *                                          (`facts`), never sentences; the
+ *                                          sentences are written when the
+ *                                          result is shown (present_bundle()).
+ *   - topbar cache  (transient, 5 min):    lean, language-free copy of the
+ *                                          bundle the topbar reads.
+ *   - progress      (option, autoload=no): in-flight scan cursor / total.
+ *   - dismissed     (user meta):           per-user dismissal map, each entry
+ *                                          { at: timestamp, ids: [check ids
+ *                                          that were failing when dismissed] }.
+ *
+ * @package BrikPanel
+ * @since   3.1.1
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+class Brikpanel_BrikControl_Storage {
+
+    const OPT_RESULTS      = 'brikpanel_brikcontrol_results';
+    const OPT_PROGRESS     = 'brikpanel_brikcontrol_progress';
+    /**
+     * v2 holds figures, not text: v1 cached finished sentences, so the first
+     * admin to load a page after a scan fixed the language for everyone for
+     * five minutes. v1 simply expires.
+     */
+    const TRANSIENT_TOPBAR = 'brikpanel_brikcontrol_topbar_v2';
+
+    /** Throttle for the rescan that replaces results stored in an older shape. */
+    const TRANSIENT_HEAL   = 'brikpanel_brikcontrol_heal';
+    const USER_META_KEY    = 'brikpanel_brikcontrol_dismissed';
+
+    const TRANSIENT_TTL    = 300;        // 5 minutes
+
+    // =========================================================================
+    // RESULTS
+    // =========================================================================
+
+    /**
+     * Default empty bundle returned when no scan has run yet. Keeping the
+     * shape stable means consumers (topbar, banner, page) can render a
+     * "never scanned" state without null-checks scattered everywhere.
+     *
+     * @return array
+     */
+    public static function default_results() {
+        return [
+            'last_scan'      => 0,
+            'status_summary' => [
+                'ok'       => 0,
+                'warning'  => 0,
+                'critical' => 0,
+                'unknown'  => 0,
+            ],
+            'checks'         => [],
+        ];
+    }
+
+    /**
+     * @return array
+     */
+    public static function get_results() {
+        $stored = get_option( self::OPT_RESULTS, null );
+        if ( ! is_array( $stored ) ) {
+            return self::default_results();
+        }
+        $bundle = wp_parse_args( $stored, self::default_results() );
+
+        // A check that no longer exists (the Bot Traffic check replaced
+        // Add-to-Cart History in 3.3.11) must not keep rendering its last
+        // result, and its status must not keep colouring the shield, until
+        // the next scan happens to overwrite the bundle.
+        if ( class_exists( 'Brikpanel_BrikControl_Registry' ) && is_array( $bundle['checks'] ) ) {
+            $known   = Brikpanel_BrikControl_Registry::get_all();
+            $dropped = false;
+            foreach ( array_keys( $bundle['checks'] ) as $check_id ) {
+                if ( ! isset( $known[ $check_id ] ) ) {
+                    unset( $bundle['checks'][ $check_id ] );
+                    $dropped = true;
+                }
+            }
+            if ( $dropped ) {
+                $summary = [ 'ok' => 0, 'warning' => 0, 'critical' => 0, 'unknown' => 0 ];
+                foreach ( $bundle['checks'] as $r ) {
+                    $status = isset( $r['status'] ) && isset( $summary[ $r['status'] ] ) ? (string) $r['status'] : 'unknown';
+                    $summary[ $status ]++;
+                }
+                $bundle['status_summary'] = $summary;
+            }
+        }
+
+        return $bundle;
+    }
+
+    /**
+     * Replace the entire result bundle and recompute the summary chip counts
+     * so the topbar/banner never have to walk every check on render.
+     *
+     * @param array $checks Map of check_id => CheckResult.
+     * @return void
+     */
+    public static function save_results( array $checks ) {
+        $summary = [ 'ok' => 0, 'warning' => 0, 'critical' => 0, 'unknown' => 0 ];
+        foreach ( $checks as $result ) {
+            $status = isset( $result['status'] ) ? (string) $result['status'] : 'unknown';
+            if ( ! isset( $summary[ $status ] ) ) {
+                $status = 'unknown';
+            }
+            $summary[ $status ]++;
+        }
+
+        $bundle = [
+            'last_scan'      => time(),
+            'status_summary' => $summary,
+            'checks'         => $checks,
+        ];
+
+        update_option( self::OPT_RESULTS, $bundle, false );
+        delete_transient( self::TRANSIENT_TOPBAR );
+    }
+
+    /**
+     * Update a single check's result without touching the rest. Used by the
+     * batched runner so each completed batch publishes a partial-state result
+     * without waiting for every check to finish.
+     *
+     * @param string $check_id
+     * @param array  $result
+     * @return void
+     */
+    public static function save_check_result( $check_id, array $result ) {
+        $bundle               = self::get_results();
+        $bundle['checks'][ $check_id ] = $result;
+
+        $summary = [ 'ok' => 0, 'warning' => 0, 'critical' => 0, 'unknown' => 0 ];
+        foreach ( $bundle['checks'] as $r ) {
+            $s = isset( $r['status'] ) ? (string) $r['status'] : 'unknown';
+            if ( ! isset( $summary[ $s ] ) ) {
+                $s = 'unknown';
+            }
+            $summary[ $s ]++;
+        }
+        $bundle['status_summary'] = $summary;
+        $bundle['last_scan']      = time();
+
+        update_option( self::OPT_RESULTS, $bundle, false );
+        delete_transient( self::TRANSIENT_TOPBAR );
+    }
+
+    // =========================================================================
+    // TOPBAR CACHE
+    // =========================================================================
+
+    /**
+     * Payload for the topbar dropdown, in the current language.
+     *
+     * The cache holds figures only (the language-free lean bundle); the
+     * sentences are written here, on every read, for whoever is looking. The
+     * cache still spares each page load the option read of the full bundle.
+     *
+     * @return array { last_scan, summary: status counts, checks: [ { id, label, status, summary } ] }
+     */
+    public static function get_topbar_payload() {
+        $lean = get_transient( self::TRANSIENT_TOPBAR );
+        if ( ! is_array( $lean ) || ! isset( $lean['checks'] ) ) {
+            $bundle = self::get_results();
+            self::maybe_heal( $bundle );
+            $lean = [
+                'last_scan'      => (int) $bundle['last_scan'],
+                'status_summary' => $bundle['status_summary'],
+                'checks'         => [],
+            ];
+            foreach ( (array) $bundle['checks'] as $id => $result ) {
+                $lean['checks'][ (string) $id ] = self::lean_result( (array) $result );
+            }
+            set_transient( self::TRANSIENT_TOPBAR, $lean, self::TRANSIENT_TTL );
+        }
+
+        $presented = self::present_bundle( 'summary', $lean );
+
+        $payload = [
+            'last_scan' => (int) $presented['last_scan'],
+            'summary'   => $presented['status_summary'],
+            'checks'    => [],
+        ];
+        foreach ( $presented['checks'] as $id => $result ) {
+            $payload['checks'][] = [
+                'id'      => (string) $id,
+                'label'   => isset( $result['label'] ) ? (string) $result['label'] : (string) $id,
+                'status'  => isset( $result['status'] ) ? (string) $result['status'] : 'unknown',
+                'summary' => isset( $result['summary'] ) ? (string) $result['summary'] : '',
+            ];
+        }
+        return $payload;
+    }
+
+    /**
+     * A stored result without what only the full page needs (sample rows,
+     * the largest-images list, the bot traffic card's lists of days left
+     * alone): enough to write the one-line summary.
+     *
+     * @param array $result Stored result.
+     * @return array
+     */
+    private static function lean_result( array $result ) {
+        unset( $result['recommendations'] );
+        if ( ! empty( $result['facts'] ) && is_array( $result['facts'] ) ) {
+            unset( $result['metadata'], $result['facts']['samples'], $result['facts']['largest'], $result['facts']['explained_days'], $result['facts']['real_days'] );
+        } elseif ( isset( $result['metadata'] ) && is_array( $result['metadata'] ) ) {
+            // Written before 3.3.25: the image check still reads its figures
+            // from here, so only the lists go.
+            unset( $result['metadata']['samples'], $result['metadata']['largest'] );
+        }
+        return $result;
+    }
+
+    /**
+     * The bundle as the viewer should read it: every check's own
+     * bc_present() writes its sentences in the current language.
+     *
+     * @param string     $context 'page' or 'summary'.
+     * @param array|null $bundle  Bundle to present; the stored one when null.
+     * @return array
+     */
+    public static function present_bundle( $context = 'page', ?array $bundle = null ) {
+        if ( null === $bundle ) {
+            $bundle = self::get_results();
+        }
+        $bundle = wp_parse_args( $bundle, self::default_results() );
+
+        foreach ( (array) $bundle['checks'] as $id => $result ) {
+            $check = class_exists( 'Brikpanel_BrikControl_Registry' ) ? Brikpanel_BrikControl_Registry::get( (string) $id ) : null;
+            if ( ! $check || ! is_array( $result ) || ! method_exists( $check, 'bc_present' ) ) {
+                continue;
+            }
+            try {
+                $bundle['checks'][ $id ] = $check->bc_present( $result, $context );
+            } catch ( \Throwable $e ) {
+                // A check that cannot present its result still shows what was
+                // stored, rather than taking the whole page down with it.
+                unset( $e );
+            }
+        }
+
+        return $bundle;
+    }
+
+    /**
+     * Queue one rescan when a check's stored result is older than the shape it
+     * writes now (a result from before 3.3.25 holds sentences in the language
+     * of whoever ran that scan). Runs where the bundle is read anyway; at most
+     * once an hour, never while a scan is in flight.
+     *
+     * @param array|null $bundle Stored bundle, to save a second option read.
+     * @return bool Whether a rescan was requested.
+     */
+    public static function maybe_heal( ?array $bundle = null ) {
+        if ( ! class_exists( 'Brikpanel_BrikControl_Registry' ) || ! class_exists( 'Brikpanel_BrikControl_Runner' ) ) {
+            return false;
+        }
+        if ( null === $bundle ) {
+            $bundle = self::get_results();
+        }
+
+        $outdated = false;
+        foreach ( Brikpanel_BrikControl_Registry::get_all() as $id => $check ) {
+            $stored = isset( $bundle['checks'][ $id ] ) && is_array( $bundle['checks'][ $id ] ) ? $bundle['checks'][ $id ] : null;
+            if ( null === $stored || ! method_exists( $check, 'bc_schema' ) ) {
+                continue; // Never scanned: the first scan writes the new shape.
+            }
+            if ( (int) ( $stored['schema'] ?? 1 ) < (int) $check->bc_schema() ) {
+                $outdated = true;
+                break;
+            }
+        }
+        if ( ! $outdated || get_transient( self::TRANSIENT_HEAL ) || self::is_scan_active() ) {
+            return false;
+        }
+
+        set_transient( self::TRANSIENT_HEAL, 1, HOUR_IN_SECONDS );
+        return false !== Brikpanel_BrikControl_Runner::trigger_manual_scan();
+    }
+
+    // =========================================================================
+    // PROGRESS (in-flight scan)
+    // =========================================================================
+
+    /**
+     * @return array { check_id, cursor, total, started_at }
+     */
+    public static function get_progress() {
+        $stored = get_option( self::OPT_PROGRESS, null );
+        if ( ! is_array( $stored ) ) {
+            return [
+                'check_id'   => '',
+                'cursor'     => 0,
+                'total'      => 0,
+                'started_at' => 0,
+            ];
+        }
+        return wp_parse_args( $stored, [
+            'check_id'   => '',
+            'cursor'     => 0,
+            'total'      => 0,
+            'started_at' => 0,
+        ] );
+    }
+
+    public static function set_progress( $check_id, $cursor, $total ) {
+        update_option( self::OPT_PROGRESS, [
+            'check_id'   => (string) $check_id,
+            'cursor'     => (int) $cursor,
+            'total'      => (int) $total,
+            'started_at' => time(),
+        ], false );
+    }
+
+    public static function clear_progress() {
+        delete_option( self::OPT_PROGRESS );
+    }
+
+    /**
+     * A scan is considered active if progress was written within the last
+     * hour. The hour cap protects against a worker dying mid-batch and
+     * leaving the lock in place forever.
+     *
+     * @return bool
+     */
+    public static function is_scan_active() {
+        $progress = self::get_progress();
+        if ( $progress['started_at'] <= 0 ) {
+            return false;
+        }
+        return ( time() - (int) $progress['started_at'] ) < HOUR_IN_SECONDS;
+    }
+
+    // =========================================================================
+    // DISMISSALS (per-user, permanent, scoped to what was failing)
+    // =========================================================================
+
+    /**
+     * Sorted ids of every check currently reporting "critical". This is the
+     * scope a dashboard-banner dismissal is recorded against: the merchant is
+     * saying "I know about these", not "hide this banner forever".
+     *
+     * @param array|null $bundle Result bundle, to save callers that already
+     *                           hold one a second option read.
+     * @return string[]
+     */
+    public static function critical_check_ids( ?array $bundle = null ) {
+        if ( $bundle === null ) {
+            $bundle = self::get_results();
+        }
+        $ids = [];
+        foreach ( (array) ( isset( $bundle['checks'] ) ? $bundle['checks'] : [] ) as $check_id => $result ) {
+            $status = isset( $result['status'] ) ? (string) $result['status'] : '';
+            if ( $status === 'critical' ) {
+                $ids[] = (string) $check_id;
+            }
+        }
+        sort( $ids );
+        return $ids;
+    }
+
+    /**
+     * User meta key for the CURRENT site.
+     *
+     * User meta is global on multisite, so a single shared key meant that
+     * dismissing the banner on one store silenced it on every other store in
+     * the network — even though each store has its own products and therefore
+     * its own critical findings. Prefixing per blog (the same convention core
+     * uses for capabilities) keeps each store's dismissals to itself.
+     *
+     * Single-site installs keep the original unprefixed key, so nothing there
+     * has to migrate.
+     *
+     * @return string
+     */
+    private static function meta_key() {
+        if ( ! is_multisite() ) {
+            return self::USER_META_KEY;
+        }
+        global $wpdb;
+        return $wpdb->get_blog_prefix() . self::USER_META_KEY;
+    }
+
+    /**
+     * @param int|null $user_id Defaults to current user.
+     * @return array<string, array{at:int, ids:string[]}|int> Legacy rows are
+     *         still plain ints; callers must tolerate both shapes.
+     */
+    public static function get_dismissals( $user_id = null ) {
+        $user_id = $user_id ?: get_current_user_id();
+        if ( $user_id <= 0 ) {
+            return [];
+        }
+
+        $stored = get_user_meta( $user_id, self::meta_key(), true );
+        if ( is_array( $stored ) ) {
+            return $stored;
+        }
+
+        // Network installs that dismissed under the old shared key: hand that
+        // value to the main site only. Adopting it everywhere would just
+        // recreate the cross-store bleed this prefix exists to stop.
+        if ( is_multisite() && is_main_site() ) {
+            $legacy = get_user_meta( $user_id, self::USER_META_KEY, true );
+            if ( is_array( $legacy ) ) {
+                return $legacy;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Record a dismissal permanently.
+     *
+     * The scope ids are UNIONed with whatever was already stored rather than
+     * replacing it. Union is what makes the banner stay quiet in the two cases
+     * merchants actually hit: an issue that gets fixed and later regresses is
+     * not a new problem, and a background scan that lands between the render
+     * and the click must not silently widen the set the user thought they were
+     * dismissing.
+     *
+     * @param string   $check_id  Dismissal key (e.g. 'dashboard_banner').
+     * @param string[] $scope_ids Check ids that were failing at dismiss time.
+     * @param int|null $user_id
+     * @return void
+     */
+    public static function dismiss( $check_id, array $scope_ids = [], $user_id = null ) {
+        $user_id = $user_id ?: get_current_user_id();
+        if ( $user_id <= 0 ) {
+            return;
+        }
+
+        $check_id = (string) $check_id;
+        $stored   = self::get_dismissals( $user_id );
+        $existing = isset( $stored[ $check_id ] ) ? $stored[ $check_id ] : null;
+
+        $ids = [];
+        if ( is_array( $existing ) && isset( $existing['ids'] ) && is_array( $existing['ids'] ) ) {
+            $ids = array_map( 'strval', $existing['ids'] );
+        }
+        $ids = array_values( array_unique( array_merge( $ids, array_map( 'strval', $scope_ids ) ) ) );
+        sort( $ids );
+
+        $stored[ $check_id ] = [
+            'at'  => time(),
+            'ids' => $ids,
+        ];
+        update_user_meta( $user_id, self::meta_key(), $stored );
+    }
+
+    /**
+     * Whether a dismissal still suppresses the notice.
+     *
+     * Dismissals no longer expire. Suppression lifts only when something the
+     * user has never dismissed shows up: if every id in $scope_ids is already
+     * covered by the stored set, stay hidden.
+     *
+     * @param string        $check_id
+     * @param string[]|null $scope_ids Current failing ids. Null means the
+     *                                 caller has no scope, so any stored
+     *                                 dismissal suppresses unconditionally.
+     * @param int|null      $user_id
+     * @return bool
+     */
+    public static function is_dismissed( $check_id, ?array $scope_ids = null, $user_id = null ) {
+        $stored = self::get_dismissals( $user_id );
+        if ( ! isset( $stored[ $check_id ] ) ) {
+            return false;
+        }
+        if ( $scope_ids === null ) {
+            return true;
+        }
+
+        $entry = $stored[ $check_id ];
+
+        // Legacy rows are a bare timestamp with no record of what was wrong at
+        // the time. The user did click the X, so honour that — adopt today's
+        // scope so a genuinely new problem can still surface later.
+        if ( ! is_array( $entry ) ) {
+            self::dismiss( $check_id, $scope_ids, $user_id );
+            return true;
+        }
+
+        $known = ( isset( $entry['ids'] ) && is_array( $entry['ids'] ) ) ? array_map( 'strval', $entry['ids'] ) : [];
+        return array_diff( array_map( 'strval', $scope_ids ), $known ) === [];
+    }
+}

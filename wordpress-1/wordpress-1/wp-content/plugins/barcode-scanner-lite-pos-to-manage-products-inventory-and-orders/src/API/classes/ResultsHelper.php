@@ -1,0 +1,205 @@
+<?php
+
+namespace UkrSolution\BarcodeScanner\API\classes;
+
+use UkrSolution\BarcodeScanner\Database;
+use UkrSolution\BarcodeScanner\features\locations\Locations;
+
+class ResultsHelper
+{
+    private static $locationsList = array();
+
+    public static function getLocationsList()
+    {
+        if (!self::$locationsList) {
+            $Locations = new Locations();
+            self::$locationsList = $Locations->get();
+        }
+
+        return self::$locationsList;
+    }
+
+    public static function getStoreData()
+    {
+        $baseLocation = \wc_get_base_location();
+        $_country = "";
+        $_state = "";
+        if ($baseLocation && isset($baseLocation["country"]) && $baseLocation["country"]) {
+            $_country = \WC()->countries->countries[$baseLocation["country"]];
+            $states = \WC()->countries->get_states($baseLocation["country"]);
+
+            if ($states && isset($baseLocation["state"]) && $baseLocation["state"]) {
+                $_state = isset($states[$baseLocation["state"]]) ? $states[$baseLocation["state"]] : "";
+            }
+        }
+        return array(
+            "name" => get_bloginfo("name"),
+            "address" => array(
+                "address" => get_option('woocommerce_store_address'),
+                "address_2" => get_option('woocommerce_store_address_2'),
+                "country" => $_country,
+                "state" => $_state,
+                "city" => get_option('woocommerce_store_city'),
+                "postcode" => get_option('woocommerce_store_postcode'),
+            ),
+        );
+
+        return self::$locationsList;
+    }
+
+    public static function getReceiptShortcodesOrder($settings, $orderId)
+    {
+        $receiptTemplate = $settings->getSettings("receipt-template");
+        $receiptTemplate = $receiptTemplate ? $receiptTemplate->value : "";
+        $receiptShortcodesValue = array();
+
+        if ($receiptTemplate) {
+            $pattern = '/\[barcode\s+id=.*\s+shortcode=(\d+)\]/';
+
+            preg_match_all($pattern, $receiptTemplate, $matches, PREG_SET_ORDER);
+
+            foreach ($matches as $match) {
+                $shortcode = $match[0];
+                $shortcodeWithId = $shortcode;
+
+                $attributes = shortcode_parse_atts($shortcode);
+
+                $id = isset($attributes["id"]) ? $attributes["id"] : null;
+
+                if ($id !== null)
+                    $shortcodeWithId = str_replace($id, $orderId, $shortcode);
+
+                if ($match && count($match) === 2)
+                    $receiptShortcodesValue[$shortcode] = array("html" => do_shortcode($shortcodeWithId), "shortcode_id" => $match[1], "shortcode" => $shortcodeWithId);
+            }
+        }
+
+        return $receiptShortcodesValue;
+    }
+
+    public static function getReceiptShortcodesOrderItem($settings, $order, $item)
+    {
+        $receiptTemplate = $settings->getSettings("receipt-template");
+        $receiptTemplate = $receiptTemplate ? $receiptTemplate->value : "";
+        $receiptShortcodesValue = array();
+
+        if ($receiptTemplate) {
+            $pattern = '/\[barcode\s+id=product_id\s+shortcode=(\d+)\]/';
+
+            preg_match_all($pattern, $receiptTemplate, $matches, PREG_SET_ORDER);
+
+            foreach ($matches as $match) {
+                $shortcode = $match[0];
+                $shortcodeWithId = $shortcode;
+
+                $attributes = shortcode_parse_atts($shortcode);
+
+                $id = isset($attributes["id"]) ? $attributes["id"] : null;
+
+                if ($id !== null) {
+                    $product = $item->get_product();
+                    $sku = $product ? $product->get_id() : "";
+                    $shortcodeWithId = str_replace($id, $sku, $shortcode);
+                }
+
+                if ($match && count($match) === 2)
+                    $receiptShortcodesValue[$shortcode] = array("html" => do_shortcode($shortcodeWithId), "shortcode_id" => $match[1], "shortcode" => $shortcodeWithId);
+            }
+        }
+
+        return $receiptShortcodesValue;
+    }
+
+    public static function get_user_pending_orders_count($user_id, $order_id, $statuses)
+    {
+        if ($user_id && $statuses) {
+            if (is_string($statuses)) {
+                $statuses = explode(',', $statuses);
+                $statuses = array_map('trim', $statuses);
+            }
+
+            $customer_orders = wc_get_orders(
+                array(
+                    'status' => $statuses,
+                    'customer_id' => $user_id,
+                    'limit' => -1,
+                )
+            );
+
+            $count = 0;
+
+            foreach ($customer_orders as $order) {
+                if ((int) $order->get_id() !== (int) $order_id) {
+                    $count++;
+                }
+            }
+
+            return $count;
+
+        }
+
+        return 0;
+    }
+
+    public static function getExtraData($userId)
+    {
+        global $wpdb;
+
+        if (!$userId) {
+            return array();
+        }
+
+        // @codingStandardsIgnoreStart
+        $table = $wpdb->prefix . Database::$cartData;
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is generated internally.
+        $data = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$table} WHERE `user_id` = %d;", $userId));
+        // @codingStandardsIgnoreEnd
+
+        $extraData = array();
+
+        foreach ($data as $value) {
+            $extraData[$value->param] = $value->value;
+        }
+
+        return $extraData;
+    }
+
+    public static function getFormattedPrice($data)
+    {
+        $priceThousandSeparator = "";
+        $priceDecimalSeparator = ".";
+
+        if (function_exists('wc_get_price_thousand_separator')) {
+            $priceThousandSeparator = \wc_get_price_thousand_separator();
+        }
+
+        if (function_exists('wc_get_price_decimal_separator')) {
+            $priceDecimalSeparator = \wc_get_price_decimal_separator();
+        }
+
+        $string = html_entity_decode($data);
+
+        $escapedThousandSeparator = preg_quote($priceThousandSeparator, '/');
+        $escapedDecimalSeparator = preg_quote($priceDecimalSeparator, '/');
+
+        $regex = "/[^0-9{$escapedThousandSeparator}{$escapedDecimalSeparator}]/";
+        $price = preg_replace($regex, '', $string);
+
+        return trim($price, ".,");
+    }
+
+    public static function getNumberPriceFormat($data)
+    {
+        $priceDecimalSeparator = ".";
+
+        if (function_exists('wc_get_price_decimal_separator')) {
+            $priceDecimalSeparator = \wc_get_price_decimal_separator();
+        }
+
+        if ($priceDecimalSeparator && $priceDecimalSeparator != '.') {
+            return str_replace($priceDecimalSeparator, '.', trim($data));
+        }
+
+        return trim($data);
+    }
+}

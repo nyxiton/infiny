@@ -1,0 +1,806 @@
+/**
+ * BrikPanel — Operational Expenses
+ * Shopify-inspired, monochrome design system.
+ */
+
+/* ── Variables ──────────────────────────────────────────────────────────────── */
+:root {
+    --ex-bg:             #f1f1f1;
+    --ex-card:           #ffffff;
+    --ex-text:           #303030;
+    --ex-text-secondary: #616161;
+    --ex-text-placeholder:     #8a8a8a;
+    --ex-border:         #e3e3e3;
+    --ex-input-border:   #8a8a8a;
+    --ex-input-focus:    #303030;
+    --ex-primary:        #303030;
+    --ex-primary-hover:  #1a1a1a;
+    --ex-success:        #1a8917;
+    --ex-error:          #d72c0d;
+    --ex-radius:         0.5rem;
+    --ex-radius-card:    0.75rem;
+}
+
+/* ── Layout ─────────────────────────────────────────────────────────────────── */
+/* Width, gutters and top spacing: the wide page shell
+   (front-end/shared/brikpanel-ui.css, `brikpanel-shell__page`). */
+.brikpanel-expenses-wrap {
+    padding-bottom: 2rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--ex-text);
+    box-sizing: border-box;
+}
+
+.brikpanel-expenses-wrap *,
+.brikpanel-expenses-wrap *::before,
+.brikpanel-expenses-wrap *::after {
+    box-sizing: border-box;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────────── */
+.brikpanel-ex-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 0 0 1rem;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.brikpanel-ex-header h1 {
+    margin: 0 0 0.25rem;
+    font-size: var(--brikpanel-title-size, 1.125rem);
+    font-weight: var(--brikpanel-title-weight, 600);
+    line-height: var(--brikpanel-title-line, 1.3);
+    padding: 0;
+    color: var(--ex-text);
+}
+
+.brikpanel-ex-subtitle {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--ex-text-secondary);
+    line-height: 1.5;
+}
+
+/* ── Summary bar ────────────────────────────────────────────────────────────── */
+/* Two figures side by side while both fit, otherwise a short list
+   (front-end/shared/brikpanel-tiles.js, data-bp-tiles). On a phone they
+   wrapped one under the other at two different widths. A figure keeps its
+   own size on a wide screen (--bp-tile-max); the template is the look
+   without the script. */
+.brikpanel-ex-summary {
+    --bp-tile-max: 16rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 16rem));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.brikpanel-ex-summary-card {
+    background: var(--ex-card);
+    border: 1px solid var(--ex-border);
+    border-radius: var(--ex-radius-card);
+    padding: 1rem 1.25rem;
+    min-width: 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.brikpanel-ex-summary.is-tiles-list {
+    gap: 0.5rem;
+}
+
+.brikpanel-ex-summary.is-tiles-list .brikpanel-ex-summary-card {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.625rem 1rem;
+}
+
+.brikpanel-ex-summary.is-tiles-list .brikpanel-ex-summary-label {
+    margin-bottom: 0;
+}
+
+.brikpanel-ex-summary.is-tiles-list .brikpanel-ex-summary-value {
+    font-size: 1rem;
+    text-align: end;
+    overflow-wrap: anywhere;
+}
+
+.brikpanel-ex-summary-label {
+    font-size: var(--brikpanel-label-size, 0.8125rem);
+    font-weight: var(--brikpanel-label-weight, 550);
+    color: #616161;
+    text-transform: var(--brikpanel-caps-case, none);
+    letter-spacing: var(--brikpanel-caps-track, normal);
+    margin-bottom: 0.375rem;
+}
+
+.brikpanel-ex-summary-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--ex-text);
+    line-height: 1.2;
+}
+
+/* ── Cards ───────────────────────────────────────────────────────────────────── */
+.brikpanel-ex-card {
+    background: var(--ex-card);
+    border: 1px solid var(--ex-border);
+    border-radius: var(--ex-radius-card);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    margin-bottom: 1rem;
+}
+
+/* ── Setting card (payment fees) ─────────────────────────────────────────────── */
+.brikpanel-ex-setting {
+    padding: 1.125rem 1.25rem;
+}
+
+.brikpanel-ex-setting-main {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1.5rem;
+}
+
+.brikpanel-ex-setting-text {
+    min-width: 0; /* lets the description wrap instead of pushing the switch off */
+}
+
+.brikpanel-ex-setting-title {
+    display: block;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--ex-text);
+    cursor: pointer;
+}
+
+.brikpanel-ex-setting-desc {
+    margin: 0.25rem 0 0;
+    max-width: 62ch;
+    color: var(--ex-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.5;
+}
+
+/* 40x22 switch, monochrome like every other control on this screen. */
+.brikpanel-ex-switch {
+    position: relative;
+    flex: 0 0 auto;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    margin-top: 0.125rem;
+}
+
+.brikpanel-ex-switch input {
+    position: absolute;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    cursor: pointer;
+}
+
+.brikpanel-ex-switch-slider {
+    position: absolute;
+    inset: 0;
+    background: #ccc;
+    border-radius: 22px;
+    transition: background 0.15s ease;
+    pointer-events: none;
+}
+
+.brikpanel-ex-switch-slider::before {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 16px;
+    height: 16px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: transform 0.15s ease;
+}
+
+.brikpanel-ex-switch input:checked + .brikpanel-ex-switch-slider {
+    background: var(--ex-primary);
+}
+
+.brikpanel-ex-switch input:checked + .brikpanel-ex-switch-slider::before {
+    transform: translateX(18px);
+}
+
+.brikpanel-ex-switch input:focus-visible + .brikpanel-ex-switch-slider {
+    box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--ex-input-focus);
+}
+
+.brikpanel-ex-switch input:disabled {
+    cursor: default;
+}
+
+.brikpanel-ex-switch input:disabled + .brikpanel-ex-switch-slider {
+    opacity: 0.6;
+}
+
+/* Persistent, not a toast: it stays until the merchant resolves the conflict. */
+.brikpanel-ex-note {
+    margin: 0.875rem 0 0;
+    padding: 0.625rem 0.75rem;
+    border-radius: var(--ex-radius);
+    font-size: 0.75rem;
+    line-height: 1.5;
+}
+
+.brikpanel-ex-note.is-warning {
+    background: #fdf5e6;
+    border: 1px solid #e8d5a8;
+    color: #7a5a12;
+}
+
+.brikpanel-ex-note[hidden] {
+    display: none;
+}
+
+@media (max-width: 600px) {
+    .brikpanel-ex-setting-main {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+}
+
+/* ── Filters ─────────────────────────────────────────────────────────────────── */
+/* The row, its fields, labels and boxes are the shared parts in
+   front-end/shared/brikpanel-ui.css (.brikpanel-filter-bar, .brikpanel-field,
+   .brikpanel-control): one control height, so the three labels and the three
+   boxes line up and the buttons are as tall as the boxes (field test D1). */
+.brikpanel-ex-filters {
+    padding: 1.125rem 1.25rem;
+}
+
+/* Only on a wide row: in the phone column a flex basis would become a height. */
+@media (min-width: 641px) {
+    .brikpanel-ex-filter-row .brikpanel-ex-field {
+        flex: 0 1 11rem;
+    }
+}
+
+/* ── Input Group (prefix/suffix) ─────────────────────────────────────────────── */
+/* Drawn as one control: the same height and edge as the shared box. */
+.brikpanel-ex-input-group {
+    display: flex;
+    align-items: stretch;
+    box-sizing: border-box;
+    height: var(--brikpanel-control-h, 2.5rem);
+    border: 1px solid var(--ex-input-border);
+    border-radius: var(--ex-radius);
+    background: #fff;
+    overflow: hidden;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.brikpanel-ex-input-group:focus-within {
+    border-color: var(--ex-input-focus);
+    box-shadow: 0 0 0 1px var(--ex-input-focus);
+}
+
+.brikpanel-ex-prefix,
+.brikpanel-ex-suffix {
+    display: flex;
+    align-items: center;
+    padding: 0 0.625rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--ex-text-secondary);
+    background: #f7f7f7;
+    border-right: 1px solid var(--ex-border);
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.brikpanel-ex-suffix {
+    border-right: none;
+    border-left: 1px solid var(--ex-border);
+}
+
+/* display:flex above out-specifies the UA `[hidden]{display:none}`, so the JS
+   toggle that swaps the currency prefix for a "%" suffix (fixed ↔ percentage)
+   would leave both showing. Re-assert it. */
+.brikpanel-ex-prefix[hidden],
+.brikpanel-ex-suffix[hidden] {
+    display: none;
+}
+
+.brikpanel-ex-input-group input {
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    flex: 1;
+    min-width: 0;
+    height: auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: var(--ex-text);
+    background: transparent;
+}
+
+.brikpanel-ex-input-group input:focus {
+    outline: none;
+    box-shadow: none !important;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────────── */
+.brikpanel-ex-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 1rem;
+    font-size: 0.8125rem;
+    font-weight: 550;
+    border-radius: var(--ex-radius);
+    border: none;
+    cursor: pointer;
+    line-height: 1.4;
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s;
+    font-family: inherit;
+    white-space: nowrap;
+}
+
+.brikpanel-ex-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.brikpanel-ex-btn-primary {
+    background: var(--ex-primary);
+    color: #fff;
+    box-shadow: inset 0 -1px 0 rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+
+.brikpanel-ex-btn-primary:hover:not(:disabled) {
+    background: var(--ex-primary-hover);
+}
+
+.brikpanel-ex-btn-secondary {
+    background: #fff;
+    color: var(--ex-text);
+    box-shadow: inset 0 0 0 1px var(--ex-border), 0 1px 0 rgba(0,0,0,0.05);
+}
+
+.brikpanel-ex-btn-secondary:hover:not(:disabled) {
+    background: #f7f7f7;
+}
+
+/* ── Icon buttons ──────────────────────────────────────────────────────────── */
+.brikpanel-ex-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 0.375rem;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--ex-text-placeholder);
+    transition: background 0.1s, color 0.1s;
+    padding: 0;
+}
+
+.brikpanel-ex-icon-btn:hover {
+    background: #f0f0f0;
+    color: var(--ex-text);
+}
+
+.brikpanel-ex-delete-btn:hover {
+    background: #fce4e4;
+    color: var(--ex-error);
+}
+
+/* ── Table ───────────────────────────────────────────────────────────────────── */
+.brikpanel-ex-table-card {
+    padding: 0;
+    overflow: hidden;
+}
+
+.brikpanel-ex-table-wrap {
+    overflow-x: auto;
+}
+
+.brikpanel-ex-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.brikpanel-ex-table thead th {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    font-size: var(--brikpanel-th-size, 0.75rem);
+    font-weight: var(--brikpanel-th-weight, 600);
+    text-transform: var(--brikpanel-caps-case, none);
+    letter-spacing: var(--brikpanel-caps-track, normal);
+    color: var(--ex-text-secondary);
+    border-bottom: 1px solid var(--ex-border);
+    white-space: nowrap;
+    background: #fafafa;
+}
+
+.brikpanel-ex-table tbody tr {
+    border-bottom: 1px solid var(--ex-border);
+    transition: background 0.1s;
+}
+
+.brikpanel-ex-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.brikpanel-ex-table tbody tr:hover {
+    background: #fafafa;
+}
+
+.brikpanel-ex-table tbody td {
+    padding: 0.75rem 1rem;
+    vertical-align: middle;
+    color: var(--ex-text);
+}
+
+.brikpanel-ex-table th.brikpanel-ex-num,
+.brikpanel-ex-table td.brikpanel-ex-num {
+    text-align: right;
+}
+
+.brikpanel-ex-table th.brikpanel-ex-actions-th,
+.brikpanel-ex-actions-cell {
+    text-align: right;
+    white-space: nowrap;
+    width: 72px;
+}
+
+/* The flex row lives inside the cell: display:flex on the <td> itself stopped
+   it acting as a table cell (field test B6). */
+.brikpanel-ex-actions-cell {
+    padding-right: 0.75rem;
+}
+
+.brikpanel-ex-row-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.25rem;
+}
+
+.brikpanel-ex-date-cell {
+    white-space: nowrap;
+    color: var(--ex-text-secondary);
+    font-size: 0.8125rem;
+}
+
+.brikpanel-ex-desc-cell {
+    color: var(--ex-text-secondary);
+    font-size: 0.8125rem;
+}
+
+/* The cap sits on an element inside the cell: on a bare <td> max-width is
+   ignored by the table layout, so a long description used to stretch its
+   column and push Amount, Edit and Delete out of the card (field test B6).
+   Two lines, then an ellipsis; the full text is in the title tooltip. */
+.brikpanel-ex-desc-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    min-width: 10rem;
+    max-width: 22rem;
+    overflow-wrap: break-word;
+}
+
+/* Stacked rows (brikpanel-fit-table.css draws the card): the actions start at
+   the left of their tile and the description may use the card's width. */
+.brikpanel-ex-table.is-stacked .brikpanel-ex-actions-cell {
+    padding: 0;
+}
+
+.brikpanel-ex-table.is-stacked .brikpanel-ex-row-actions {
+    justify-content: flex-start;
+}
+
+.brikpanel-ex-table.is-stacked .brikpanel-ex-desc-text {
+    min-width: 0;
+    max-width: none;
+    -webkit-line-clamp: 4;
+}
+
+/* ── Badges ──────────────────────────────────────────────────────────────────── */
+/* Optional grouping shown above the title badge. Quiet on purpose: it is a
+   secondary label, and rows without one must not look like they are missing
+   something. */
+.brikpanel-ex-parent-cat {
+    display: block;
+    margin-bottom: 0.1875rem;
+    color: var(--ex-text-secondary, #616161);
+    font-size: 0.6875rem;
+    font-weight: 550;
+    line-height: 1.3;
+}
+
+.brikpanel-ex-optional {
+    color: var(--ex-text-secondary, #616161);
+    font-size: 0.6875rem;
+    font-weight: 400;
+}
+
+/* One quiet line under the "Part of" picker. It carries the only thing the
+   label cannot say on its own — that filing a cost under another one does not
+   merge the two amounts — so it has to be readable, not decorative. */
+.brikpanel-ex-hint {
+    margin: 0.375rem 0 0;
+    color: var(--ex-text-secondary, #616161);
+    font-size: 0.6875rem;
+    font-weight: 400;
+    line-height: 1.4;
+}
+
+.brikpanel-ex-cat-badge {
+    display: inline-block;
+    padding: 0.1875rem 0.5rem;
+    border-radius: 999px;
+    background: #f0f0f0;
+    color: var(--ex-text);
+    font-size: 0.75rem;
+    font-weight: 550;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.brikpanel-ex-rec-badge {
+    display: inline-block;
+    padding: 0.1875rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 550;
+    line-height: 1.4;
+    white-space: nowrap;
+    background: #f0f0f0;
+    color: var(--ex-text-secondary);
+}
+
+.brikpanel-ex-rec-none {
+    background: #f0f0f0;
+    color: var(--ex-text-secondary, #616161);
+}
+
+.brikpanel-ex-rec-monthly {
+    background: #e8f4e8;
+    color: #1a6b15;
+}
+
+.brikpanel-ex-rec-weekly {
+    background: #e8f0f8;
+    color: #1a4a8a;
+}
+
+.brikpanel-ex-rec-yearly {
+    background: #f5f0e8;
+    color: #7a5a10;
+}
+
+/* ── Empty / loading states ──────────────────────────────────────────────────── */
+.brikpanel-ex-empty {
+    text-align: center;
+    padding: 2.5rem 1rem !important;
+    color: var(--ex-text-secondary, #616161);
+    font-size: 0.875rem;
+}
+
+.brikpanel-ex-loading {
+    text-align: center;
+    padding: 2rem 1rem !important;
+}
+
+.brikpanel-ex-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--ex-border);
+    border-top-color: var(--ex-text-secondary);
+    border-radius: 50%;
+    animation: brikpanel-ex-spin 0.7s linear infinite;
+}
+
+@keyframes brikpanel-ex-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Pagination ──────────────────────────────────────────────────────────────── */
+.brikpanel-ex-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    border-top: 1px solid var(--ex-border);
+}
+
+.brikpanel-ex-page-info {
+    font-size: 0.8125rem;
+    color: var(--ex-text-secondary);
+    min-width: 56px;
+    text-align: center;
+}
+
+/* ── Modal overlay ───────────────────────────────────────────────────────────── */
+.brikpanel-ex-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    animation: brikpanel-ex-fade-in 0.2s ease;
+}
+
+.brikpanel-ex-overlay[hidden] {
+    display: none !important;
+}
+
+@keyframes brikpanel-ex-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* ── Modal ───────────────────────────────────────────────────────────────────── */
+.brikpanel-ex-modal {
+    background: var(--ex-card);
+    border-radius: var(--ex-radius-card);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.1);
+    width: 100%;
+    max-width: 540px;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+    animation: brikpanel-ex-slide-up 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    flex-direction: column;
+}
+
+@keyframes brikpanel-ex-slide-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.brikpanel-ex-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.125rem 1.25rem;
+    border-bottom: 1px solid var(--ex-border);
+    flex-shrink: 0;
+}
+
+.brikpanel-ex-modal-header h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--ex-text);
+}
+
+.brikpanel-ex-modal-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-radius: 0.375rem;
+    font-size: 1.25rem;
+    line-height: 1;
+    color: var(--ex-text-placeholder);
+    transition: background 0.1s, color 0.1s;
+    padding: 0;
+}
+
+.brikpanel-ex-modal-close:hover {
+    background: #f0f0f0;
+    color: var(--ex-text);
+}
+
+.brikpanel-ex-modal-body {
+    padding: 1.25rem;
+    flex: 1;
+}
+
+.brikpanel-ex-modal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+
+.brikpanel-ex-field-full {
+    grid-column: 1 / -1;
+}
+
+.brikpanel-ex-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 1rem 1.25rem;
+    border-top: 1px solid var(--ex-border);
+    flex-shrink: 0;
+}
+
+/* ── Toast ────────────────────────────────────────────────────────────────────── */
+.brikpanel-ex-toast {
+    position: fixed;
+    top: 44px;
+    right: 20px;
+    z-index: 100001;
+    padding: 0.625rem 1rem;
+    border-radius: var(--ex-radius);
+    font-size: 0.875rem;
+    font-weight: 500;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    transform: translateX(110%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s;
+    opacity: 0;
+    max-width: 320px;
+    pointer-events: none;
+}
+
+.brikpanel-ex-toast--visible {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.brikpanel-ex-toast--success {
+    background: #e4f5e1;
+    color: #1a6b15;
+    border: 1px solid #b7e1b0;
+}
+
+.brikpanel-ex-toast--error {
+    background: #fce4e4;
+    color: #c62828;
+    border: 1px solid #f1b0b0;
+}
+
+/* ── [hidden] enforcement (CSS display: flex/block overrides native hidden) ── */
+.brikpanel-ex-pagination[hidden],
+.brikpanel-ex-overlay[hidden] {
+    display: none !important;
+}
+
+/* ── Body class lock (prevent scroll when modal open) ──────────────────────── */
+body.brikpanel-ex-modal-open {
+    overflow: hidden;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────────── */
+@media (max-width: 782px) {
+    .brikpanel-ex-summary {
+        --bp-tile-max: 1fr;
+    }
+}
+
+@media (max-width: 640px) {
+    .brikpanel-ex-modal-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .brikpanel-ex-header {
+        flex-direction: column;
+        flex-wrap: nowrap;
+    }
+}

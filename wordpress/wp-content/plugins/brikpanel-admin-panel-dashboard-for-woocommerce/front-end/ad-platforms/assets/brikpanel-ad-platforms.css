@@ -1,0 +1,767 @@
+/**
+ * BrikPanel — Ad Platforms admin page styles.
+ *
+ * Uses the BrikPanel design system tokens (--bg, --card, --text, etc.) so
+ * the page visually matches the Google Sheets module and the dashboard.
+ */
+
+.brikpanel-ads-wrap {
+	--bg: #f1f1f1;
+	--card: #ffffff;
+	--text: #303030;
+	--text-secondary: #616161;
+	--text-placeholder: #8a8a8a;
+	--border: #e3e3e3;
+	--input-border: #8a8a8a;
+	--input-focus: #303030;
+	--primary: #303030;
+	--primary-hover: #1a1a1a;
+	--success: #1a8917;
+	--error: #d72c0d;
+
+	/* Width, gutters and top spacing: the narrow page shell
+	   (front-end/shared/brikpanel-ui.css, `brikpanel-shell__page`). */
+	padding-bottom: 1.5rem;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	color: var(--text);
+	line-height: 1.5;
+}
+
+/* ---------- Header ---------- */
+.bp-ads-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-bottom: 1rem;
+}
+.bp-ads-header h1 {
+	font-size: var(--brikpanel-title-size, 1.125rem);
+	font-weight: var(--brikpanel-title-weight, 600);
+	line-height: var(--brikpanel-title-line, 1.3);
+	padding: 0;
+	margin: 0 0 0.25rem;
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+.bp-ads-subtitle {
+	color: var(--text-secondary);
+	margin: 0;
+	font-size: 0.875rem;
+}
+
+/* ---------- Toast ---------- */
+.bp-ads-toast {
+	position: fixed;
+	top: 44px;
+	right: 20px;
+	z-index: 100001;
+	padding: 0.75rem 1rem;
+	border-radius: 0.5rem;
+	font-size: 0.875rem;
+	font-weight: 550;
+	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+	transform: translateX(110%);
+	transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+	max-width: 360px;
+}
+.bp-ads-toast.is-visible { transform: translateX(0); }
+.bp-ads-toast.is-success {
+	background: #e4f5e1;
+	color: #1a6b15;
+	border: 1px solid #b7e1b0;
+}
+.bp-ads-toast.is-error {
+	background: #fce4e4;
+	color: #c62828;
+	border: 1px solid #f1b0b0;
+}
+
+/* ---------- Grid + Cards ---------- */
+/* Two connect cards side by side while each gets at least 20rem of the page
+   column, one under the other below that. Measured on the column, not the
+   window: the page is the narrow 820px shell, so a window-width breakpoint
+   squeezed the cards on a mid-size screen. */
+.bp-ads-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+	gap: 1rem;
+	margin-bottom: 1rem;
+}
+
+/* The connect button sits at the bottom of each card, so the two cards'
+   buttons line up whatever the text above them says (field test D10: they
+   were 78px apart). Only the platform cards: the insights card outside the
+   grid is toggled with `hidden` and keeps its own display. */
+.bp-ads-grid > .bp-ads-card {
+	display: flex;
+	flex-direction: column;
+}
+.bp-ads-grid > .bp-ads-card[hidden] {
+	display: none;
+}
+.bp-ads-grid > .bp-ads-card > .bp-ads-card-body {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+}
+.bp-ads-grid .bp-ads-card-body > .bp-ads-actions:last-child {
+	margin-top: auto;
+	padding-top: 1rem;
+}
+.bp-ads-card-body > .bp-ads-card-sub + .bp-ads-card-sub {
+	margin-top: 0.5rem;
+}
+
+.bp-ads-card {
+	background: var(--card);
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+	overflow: hidden;
+}
+.bp-ads-card-wide {
+	grid-column: 1 / -1;
+	margin-bottom: 1rem;
+}
+.bp-ads-card-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 1rem 1.25rem;
+	border-bottom: 1px solid var(--border);
+	gap: 1rem;
+}
+.bp-ads-card-header-left h2 {
+	font-size: var(--brikpanel-card-title-size, 0.9375rem);
+	font-weight: var(--brikpanel-card-title-weight, 600);
+	margin: 0 0 0.125rem;
+}
+.bp-ads-card-sub {
+	color: var(--text-secondary);
+	font-size: 0.8125rem;
+	margin: 0;
+}
+.bp-ads-card-body {
+	padding: 1.25rem;
+}
+
+/* ---------- Pill (connection status) ---------- */
+.bp-ads-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	padding: 0.25rem 0.625rem;
+	border-radius: 999px;
+	background: #f7f7f7;
+	color: var(--text-secondary);
+	font-size: 0.75rem;
+	font-weight: 600;
+	border: 1px solid var(--border);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+.bp-ads-pill-dot {
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 50%;
+	background: var(--text-placeholder);
+}
+.bp-ads-pill[data-state="live"] {
+	background: #e8f5e9;
+	color: #1a6b15;
+	border-color: #b7e1b0;
+}
+.bp-ads-pill[data-state="live"] .bp-ads-pill-dot {
+	background: var(--success);
+	box-shadow: 0 0 0 3px rgba(26, 137, 23, 0.15);
+}
+.bp-ads-pill[data-state="pending"] {
+	background: #fbf4e6;
+	color: #8a6d1a;
+	border-color: #ecdcb3;
+}
+.bp-ads-pill[data-state="pending"] .bp-ads-pill-dot {
+	background: #c79a2e;
+}
+
+/* ---------- Locked card (Google awaiting Developer Token approval) ------- */
+.bp-ads-card-locked {
+	position: relative;
+}
+/* Not the connect error box: it is the one thing on a disguised card that
+   must read at full strength. */
+.bp-ads-card-locked .bp-ads-card-body > :not(.bp-ads-connect-error) {
+	opacity: 0.65;
+}
+.bp-ads-card-locked .bp-ads-card-header {
+	opacity: 0.8;
+}
+.bp-ads-locked-note {
+	display: flex;
+	gap: 0.625rem;
+	align-items: flex-start;
+	padding: 0.875rem 1rem;
+	background: #fbf4e6;
+	border: 1px solid #ecdcb3;
+	border-radius: 0.5rem;
+	color: #8a6d1a;
+}
+.bp-ads-locked-note svg { flex-shrink: 0; margin-top: 0.1rem; }
+.bp-ads-locked-note strong {
+	display: block;
+	font-size: 0.875rem;
+	margin-bottom: 0.2rem;
+	color: #6f5713;
+}
+.bp-ads-locked-note .bp-ads-card-sub { color: #8a6d1a; }
+.bp-ads-card-locked .bp-ads-btn[disabled] {
+	opacity: 0.55;
+	cursor: not-allowed;
+	pointer-events: none;
+}
+
+/* Reconnect-required banner: the stored token stopped working, so the card is
+   still "connected" but nothing is importing. Error-toned, not warning-toned,
+   because it needs an action from the merchant. */
+.bp-ads-stale-note,
+.bp-ads-connect-error {
+	display: flex;
+	gap: 0.625rem;
+	align-items: flex-start;
+	padding: 0.875rem 1rem;
+	margin-bottom: 1rem;
+	background: #fce4e4;
+	border: 1px solid #f1b0b0;
+	border-radius: 0.5rem;
+	color: #a3271a;
+}
+.bp-ads-stale-note svg,
+.bp-ads-connect-error svg { flex-shrink: 0; margin-top: 0.1rem; }
+.bp-ads-stale-note strong,
+.bp-ads-connect-error strong {
+	display: block;
+	font-size: 0.875rem;
+	margin-bottom: 0.2rem;
+	color: #8a1f14;
+}
+.bp-ads-stale-note .bp-ads-card-sub,
+.bp-ads-connect-error .bp-ads-card-sub { color: #a3271a; margin: 0; }
+
+/* Connect error box (views/page.php): the stale note's look, beside the
+   Connect / Re-authorize button. It says what went wrong, why and what to do
+   next, and stays until the next click, where the toast it replaced was gone
+   in 3.5 s. This page has no blanket [hidden] rule, and the box and its
+   parts set their own display, so both need the guard. */
+.bp-ads-connect-error[hidden],
+.bp-ads-connect-error [hidden] {
+	display: none;
+}
+.bp-ads-connect-error .bp-ads-card-sub + .bp-ads-card-sub {
+	margin-block-start: 0.375rem;
+}
+.bp-ads-connect-error .bp-ads-connect-error-detail {
+	font-size: 0.75rem;
+	color: #616161;
+	overflow-wrap: anywhere;
+}
+.bp-ads-connect-error-detail code {
+	margin: 0;
+	padding: 0;
+	background: none;
+	/* Monospace glyphs read a size larger than the label beside them. */
+	font-size: 0.92em;
+	color: inherit;
+	user-select: all;
+}
+.bp-ads-card-body > .bp-ads-connect-error {
+	margin-block: 1rem 0;
+}
+.bp-ads-connect-error--page {
+	margin-block: 0 1rem;
+}
+/* "Connecting…" / "Still trying…" beside the button while it works. */
+.bp-ads-connect-status {
+	align-self: center;
+	font-size: 0.8125rem;
+	color: #616161;
+}
+/* With the box showing, box and button sit together at the bottom of the
+   card: the two cards' buttons still line up, and the box never floats away
+   from the button it explains. Needs :has() for the gap above the box. */
+@supports selector(:has(a)) {
+	.bp-ads-grid .bp-ads-card-body > .bp-ads-connect-error:not([hidden]) {
+		margin-block-start: auto;
+	}
+	.bp-ads-grid .bp-ads-card-body > :has(+ .bp-ads-connect-error:not([hidden])) {
+		margin-block-end: 1rem;
+	}
+	.bp-ads-grid .bp-ads-card-body > .bp-ads-connect-error:not([hidden]) + .bp-ads-actions:last-child {
+		margin-block-start: 0;
+		padding-block-start: 0.75rem;
+	}
+}
+
+/* Neutral sibling of the stale note: an unfinished setup step, not a fault. */
+.bp-ads-todo-note {
+	display: flex;
+	gap: 0.625rem;
+	align-items: flex-start;
+	padding: 0.875rem 1rem;
+	margin-top: 1rem;
+	background: #f7f7f7;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	color: var(--text-secondary);
+}
+.bp-ads-todo-note svg { flex-shrink: 0; margin-top: 0.1rem; color: var(--text); }
+.bp-ads-todo-note strong {
+	display: block;
+	font-size: 0.875rem;
+	margin-bottom: 0.2rem;
+	color: var(--text);
+}
+.bp-ads-todo-note .bp-ads-card-sub { margin: 0; }
+
+.bp-ads-inline-hint {
+	margin: 0.5rem 0 0;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	color: var(--text-secondary);
+	padding: 0.5rem 0.625rem;
+	background: #f7f7f7;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+}
+
+/* The currency note carries its way out: the link to Settings > Currency sits
+   on its own line under the sentences. */
+.bp-ads-currency-note {
+	display: flex;
+	flex-direction: column;
+	flex-wrap: nowrap;
+	align-items: flex-start;
+	gap: 0.25rem;
+}
+.bp-ads-currency-note[hidden] { display: none; }
+
+/* ---------- Form fields ---------- */
+.bp-ads-field { margin-top: 1rem; }
+.bp-ads-label {
+	display: block;
+	font-size: 0.8125rem;
+	font-weight: 600;
+	margin-bottom: 0.375rem;
+	color: var(--text);
+}
+.bp-ads-help {
+	color: var(--text-secondary);
+	font-size: 0.75rem;
+	margin: 0 0 0.5rem;
+}
+/* The boxes are the shared .brikpanel-control (front-end/shared/brikpanel-ui.css):
+   a single-class rule here lost to WordPress 7.1's square select (field test D5). */
+.bp-ads-input {
+	width: 100%;
+}
+.bp-ads-input-row {
+	display: flex;
+	gap: 0.5rem;
+	align-items: stretch;
+	flex-wrap: wrap;
+}
+.bp-ads-input-row .bp-ads-input { flex: 1 1 220px; min-width: 0; }
+.bp-ads-manual { margin-top: 0.75rem; }
+.bp-ads-manual-summary {
+	display: inline-block;
+	font-size: 0.75rem;
+	font-weight: 550;
+	color: var(--text-secondary);
+	cursor: pointer;
+	list-style: none;
+	user-select: none;
+}
+.bp-ads-manual-summary::-webkit-details-marker { display: none; }
+.bp-ads-manual-summary::before { content: "+ "; color: var(--text-placeholder); }
+.bp-ads-manual[open] .bp-ads-manual-summary::before { content: "- "; }
+.bp-ads-manual-summary:hover { color: var(--text); }
+.bp-ads-manual-body { margin-top: 0.5rem; }
+
+/* ---------- Ad account list ---------- */
+/* A fieldset groups the boxes for screen readers; the browser's frame and
+   padding around it are not wanted here. */
+.bp-ads-accounts-field {
+	margin: 1rem 0 0;
+	padding: 0;
+	border: 0;
+	min-width: 0;
+}
+.bp-ads-accounts-field > .bp-ads-label { padding: 0; }
+.bp-ads-accounts {
+	list-style: none;
+	margin: 0 0 0.75rem;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	background: #fafafa;
+	/* An agency can see dozens of accounts: the list scrolls, the card does not grow. */
+	max-height: 18rem;
+	overflow-y: auto;
+}
+.bp-ads-account {
+	margin: 0;
+	border-bottom: 1px solid #efefef;
+}
+.bp-ads-account:last-child { border-bottom: 0; }
+.bp-ads-account-label {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.625rem;
+	padding: 0.625rem 0.75rem;
+	cursor: pointer;
+}
+.bp-ads-account-label:hover { background: #f4f4f4; }
+/* Two classes: WordPress's own checkbox rule (input[type=checkbox]) carries a
+   negative margin and would win over a single class. */
+.bp-ads-account-label .bp-ads-account-check {
+	flex: 0 0 auto;
+	margin: 0.1875rem 0 0;
+	accent-color: var(--primary);
+}
+.bp-ads-account-text {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.bp-ads-account-name {
+	font-size: 0.875rem;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+.bp-ads-account-meta {
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+.bp-ads-account-label .bp-ads-account-badge { align-self: center; }
+.bp-ads-accounts-empty {
+	margin: 0 0 0.75rem;
+	font-size: 0.8125rem;
+	color: var(--text-secondary);
+}
+
+/* ---------- Buttons ---------- */
+.bp-ads-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0.5rem 1rem;
+	border-radius: 0.5rem;
+	font-size: 0.8125rem;
+	font-weight: 550;
+	border: 0;
+	cursor: pointer;
+	transition: background-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+	font-family: inherit;
+	line-height: 1.2;
+	white-space: nowrap;
+}
+.bp-ads-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.bp-ads-btn-primary {
+	background: var(--primary);
+	color: #fff;
+	box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+.bp-ads-btn-primary:hover:not(:disabled) {
+	background: var(--primary-hover);
+}
+.bp-ads-btn-secondary {
+	background: #fff;
+	color: var(--text);
+	box-shadow: inset 0 0 0 1px var(--border), 0 1px 0 rgba(0, 0, 0, 0.05);
+}
+.bp-ads-btn-secondary:hover:not(:disabled) {
+	background: #f7f7f7;
+}
+.bp-ads-btn.is-loading {
+	position: relative;
+	color: transparent !important;
+	pointer-events: none;
+}
+.bp-ads-btn.is-loading::after {
+	content: "";
+	position: absolute;
+	top: 50%; left: 50%;
+	width: 14px; height: 14px;
+	margin: -7px 0 0 -7px;
+	border: 2px solid currentColor;
+	border-right-color: transparent;
+	border-radius: 50%;
+	animation: bp-ads-spin 0.7s linear infinite;
+	color: var(--text-secondary);
+}
+.bp-ads-btn-primary.is-loading::after { color: #fff; }
+@keyframes bp-ads-spin { to { transform: rotate(360deg); } }
+
+/* ---------- Misc ---------- */
+.bp-ads-actions {
+	display: flex;
+	gap: 0.5rem;
+	margin-top: 1rem;
+	flex-wrap: wrap;
+}
+.bp-ads-actions-tight { margin-top: 0; }
+.bp-ads-divider {
+	height: 1px;
+	background: var(--border);
+	margin: 1rem 0;
+}
+.bp-ads-dl {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 0.25rem 1rem;
+	margin: 0;
+	font-size: 0.875rem;
+}
+.bp-ads-dl dt {
+	color: var(--text-secondary);
+	font-weight: 500;
+}
+.bp-ads-dl dd {
+	margin: 0;
+	color: var(--text);
+}
+.bp-ads-bad { color: var(--error); }
+/* Bullets, indent and item spacing: the shared list (.brikpanel-bullets in
+   front-end/shared/brikpanel-ui.css). WordPress removes list markers, so this
+   list read as indented sentences with no bullet (field test D11). */
+.bp-ads-list {
+	font-size: 0.875rem;
+	color: var(--text-secondary);
+}
+
+/* ---------- Backfill progress ---------- */
+.bp-ads-backfill {
+	margin-top: 0.75rem;
+	padding: 0.625rem 0.75rem;
+	background: #f7f7f7;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+}
+.bp-ads-backfill-label {
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+	margin-bottom: 0.375rem;
+}
+.bp-ads-backfill-bar {
+	height: 6px;
+	background: #e3e3e3;
+	border-radius: 999px;
+	overflow: hidden;
+}
+.bp-ads-backfill-fill {
+	height: 100%;
+	background: var(--primary);
+	border-radius: 999px;
+	transition: width 0.4s ease;
+}
+.bp-ads-backfill.is-halted { border-color: #f1b0b0; background: #fdf1f1; }
+.bp-ads-backfill.is-halted .bp-ads-backfill-label { color: #a3271a; font-weight: 600; }
+.bp-ads-backfill.is-halted .bp-ads-backfill-fill { background: #d9a2a2; }
+.bp-ads-backfill-reason {
+	margin: 0.5rem 0 0;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	color: var(--text-secondary);
+}
+.bp-ads-backfill.is-halted .bp-ads-backfill-reason { color: #a3271a; }
+
+/* ---------- Imported data (monthly breakdown) ---------- */
+.bp-ads-insight + .bp-ads-insight {
+	margin-top: 1.5rem;
+	padding-top: 1.5rem;
+	border-top: 1px solid var(--border);
+}
+.bp-ads-insight-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.75rem;
+	flex-wrap: wrap;
+	margin-bottom: 0.875rem;
+}
+.bp-ads-insight-name {
+	font-size: 0.9375rem;
+	font-weight: 600;
+	color: var(--text);
+}
+.bp-ads-insight-name .bp-ads-account-badge { margin-inline-start: 0.375rem; }
+/* Month tables folded when there are more than three accounts. */
+.bp-ads-insight-months { margin-top: 0.75rem; }
+.bp-ads-insight-months-toggle {
+	cursor: pointer;
+	font-size: 0.8125rem;
+	font-weight: 550;
+	color: var(--text-secondary);
+}
+.bp-ads-insight-months-toggle:hover { color: var(--text); }
+.bp-ads-insight-months[open] > .bp-ads-insight-months-toggle { margin-bottom: 0.625rem; }
+.bp-ads-insight-meta {
+	font-size: 0.75rem;
+	color: var(--text-secondary, #616161);
+	font-variant-numeric: tabular-nums;
+}
+
+/* KPI strip */
+.bp-ads-kpi-strip {
+	display: grid;
+	grid-template-columns: repeat(6, 1fr);
+	gap: 0.5rem;
+	margin-bottom: 1rem;
+}
+@media (max-width: 900px) {
+	.bp-ads-kpi-strip { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 520px) {
+	.bp-ads-kpi-strip { grid-template-columns: repeat(2, 1fr); }
+}
+.bp-ads-kpi {
+	background: #f7f7f7;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	padding: 0.625rem 0.75rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	min-width: 0;
+}
+.bp-ads-kpi-v {
+	font-size: 0.9375rem;
+	font-weight: 600;
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.bp-ads-kpi-l {
+	font-size: var(--brikpanel-label-size, 0.8125rem);
+	color: #616161;
+	text-transform: var(--brikpanel-caps-case, none);
+	letter-spacing: var(--brikpanel-caps-track, normal);
+	font-weight: var(--brikpanel-label-weight, 550);
+}
+
+/* Monthly table */
+.bp-ads-table-wrap {
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	overflow: hidden;
+	overflow-x: auto;
+}
+.bp-ads-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.8125rem;
+}
+.bp-ads-table th,
+.bp-ads-table td {
+	padding: 0.5rem 0.875rem;
+	text-align: left;
+	border-bottom: 1px solid var(--border);
+}
+
+/* Only the figures stay on one line; headers wrap at spaces (CLAUDE.md table
+   rule). A month table that still cannot fit stacks into cards (field test
+   B6, brikpanel-fit-table.js). */
+.bp-ads-table td {
+	white-space: nowrap;
+}
+
+/* Narrower tiles than the default keep two figures per line on a phone. */
+.bp-ads-table.is-stacked {
+	--bp-fit-tile: 7rem;
+}
+
+.bp-ads-table.is-stacked > tbody > tr.bp-ads-table-total {
+	background: #fafafa;
+}
+.bp-ads-table th {
+	background: #fafafa;
+	font-weight: var(--brikpanel-th-weight, 600);
+	color: #616161;
+	font-size: var(--brikpanel-th-size, 0.75rem);
+	text-transform: var(--brikpanel-caps-case, none);
+	letter-spacing: var(--brikpanel-caps-track, normal);
+}
+.bp-ads-table td.num,
+.bp-ads-table th.num {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+.bp-ads-table tbody tr:last-child td { border-bottom: 0; }
+.bp-ads-table tbody tr:hover { background: #fafafa; }
+.bp-ads-table-total td {
+	font-weight: 600;
+	color: var(--text);
+	background: #f4f4f4;
+	border-bottom: 1px solid var(--border);
+}
+.bp-ads-table-total:hover td { background: #f4f4f4; }
+
+/* ---------- Log panel ---------- */
+.bp-ads-log {
+	margin-top: 1rem;
+	max-height: 360px;
+	overflow-y: auto;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	background: #fafafa;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 0.75rem;
+}
+.bp-ads-log-entry {
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid var(--border);
+}
+.bp-ads-log-entry:last-child { border-bottom: 0; }
+.bp-ads-log-meta {
+	display: flex;
+	gap: 0.5rem;
+	color: var(--text-secondary, #616161);
+	margin-bottom: 0.25rem;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	font-size: 0.6875rem;
+}
+.bp-ads-log-flow {
+	text-transform: none;
+	letter-spacing: normal;
+	color: var(--text-secondary);
+	font-weight: 600;
+}
+.bp-ads-log-code { color: var(--error); }
+.bp-ads-log-sev {
+	text-transform: none;
+	letter-spacing: normal;
+	font-weight: 600;
+	padding: 0.05rem 0.375rem;
+	border-radius: 0.25rem;
+	background: #fce4e4;
+	color: #a3271a;
+}
+.bp-ads-log-sev.is-note { background: #ececec; color: var(--text-secondary); }
+.bp-ads-log-entry.is-note .bp-ads-log-msg { color: var(--text-secondary); }
+.bp-ads-log-msg { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.bp-ads-log-empty {
+	padding: 1rem;
+	text-align: center;
+	color: var(--text-secondary, #616161);
+	font-style: italic;
+}

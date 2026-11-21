@@ -1,0 +1,3617 @@
+<?php
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+/**
+ * Whether the current user runs the store: an administrator or anyone who
+ * manages WooCommerce (shop managers), the same people the abandoned-cart
+ * module treats as staff. Storefront analytics skip them, so the team
+ * checking products, testing the cart or placing a test order never shows up
+ * as visitors, product views or add-to-carts. Administrators only until 3.3.30.
+ *
+ * @return bool
+ */
+function brikpanel_is_admin_user() {
+    if ( ! is_user_logged_in() ) {
+        return false;
+    }
+    $is_staff = current_user_can( 'manage_options' ) || current_user_can( 'manage_woocommerce' );
+
+    /**
+     * Filters whether the signed-in user is left out of storefront analytics.
+     *
+     * @since 3.3.30
+     *
+     * @param bool $is_staff True for administrators and shop managers.
+     * @param int  $user_id  Current user.
+     */
+    return (bool) apply_filters( 'brikpanel_tracking_excluded_user', $is_staff, get_current_user_id() );
+}
+
+/**
+ * Whether a persistent external object cache (Redis / Memcached / etc.) is
+ * active. On shared hosts without one, every wp_cache_set is per-request
+ * only and every transient round-trips to wp_options — so we extend cache
+ * TTLs and pick storage backends accordingly.
+ *
+ * @return bool
+ */
+function brikpanel_has_object_cache() {
+    static $has = null;
+    if ( null === $has ) {
+        $has = function_exists( 'wp_using_ext_object_cache' ) && wp_using_ext_object_cache();
+    }
+    return $has;
+}
+
+/**
+ * Adjust a cache TTL for the host's storage backend. With external object
+ * cache present, the base TTL is fine. Without it, transients hit
+ * wp_options on every read/write; we extend the TTL so the same operation
+ * costs less per unit time.
+ *
+ * @param int $base_ttl Seconds when an external object cache is present.
+ * @param int $multiplier How many times longer to cache when there isn't one.
+ * @return int
+ */
+function brikpanel_cache_ttl( $base_ttl, $multiplier = 5 ) {
+    return brikpanel_has_object_cache() ? (int) $base_ttl : (int) ( $base_ttl * $multiplier );
+}
+
+/**
+ * Shared data version used by every order-derived cache key (revenue,
+ * order count, visitor count, dashboard payload, …). Bumping this value
+ * via brikpanel_bust_data_caches() invalidates every keyed transient at
+ * once — no need to enumerate or delete individual keys.
+ *
+ * @return int
+ */
+function brikpanel_data_cache_ver() {
+    static $ver = null;
+    if ( null === $ver ) {
+        $ver = (int) get_option( 'brikpanel_data_cache_ver', 1 );
+    }
+    return $ver;
+}
+
+/**
+ * Expense kinds whose `amount` column does NOT hold a period total.
+ *
+ * 'percent'   stores a RATE applied to the period's revenue.
+ * 'per_order' stores a UNIT PRICE charged once per matching order.
+ *
+ * Summing either as if it were money inflates Expenses and understates Net
+ * profit. This list is the single source of truth for that distinction so the
+ * next kind cannot drift out of one of the dozen queries that read the table.
+ *
+ * @return string[]
+ */
+function brikpanel_expense_non_money_kinds() {
+    return [ 'percent', 'per_order' ];
+}
+
+/**
+ * Ready-to-append SQL restricting a brikpanel_expenses query to money rows.
+ *
+ * Returns '' when the table has no `kind` column at all (a schema predating the
+ * kinds feature), so a caller can append it unconditionally without risking a
+ * fatal query on an un-upgraded install. At most one SHOW COLUMNS per request,
+ * and only on requests that read expenses.
+ *
+ * Contains no user input, the kind list is a hard-coded literal set, so it is
+ * safe to interpolate into an otherwise-prepared query.
+ *
+ * @param string $alias Table alias WITH trailing dot, e.g. 'e.'. '' for none.
+ * @return string e.g. " AND kind NOT IN ('percent','per_order')"
+ */
+function brikpanel_expense_money_kinds_sql( $alias = '' ) {
+    static $has_kind = null;
+    global $wpdb;
+
+    if ( null === $has_kind ) {
+        $table  = $wpdb->prefix . 'brikpanel_expenses';
+        $exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) === $table;
+        // Only memoise a definitive answer. On an activation request the table
+        // is created part-way through, and caching "no kind column" from a probe
+        // taken before dbDelta ran would drop the filter for the rest of that
+        // request, silently summing a rate as money.
+        if ( ! $exists ) {
+            return '';
+        }
+        $has_kind = (bool) $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM {$table} LIKE %s", 'kind' ) ); // phpcs:ignore WordPress.DB
+    }
+    if ( ! $has_kind ) {
+        return '';
+    }
+
+    $list = "'" . implode( "','", array_map( 'esc_sql', brikpanel_expense_non_money_kinds() ) ) . "'";
+    return " AND {$alias}kind NOT IN ({$list})";
+}
+
+/**
+ * Invalidate every order-derived cache by bumping the shared version.
+ * Hooked to woocommerce_new_order / status_changed / refunded so dashboard
+ * KPIs stay live without manual cache wiring per metric.
+ */
+function brikpanel_bust_data_caches() {
+    // Coalesced per request: the first call bumps at once, and any further
+    // calls in the same request add ONE more bump at shutdown, so data changed
+    // later in the request still invalidates. A variable product save writes
+    // cost meta for every variation and used to bump (a database write each
+    // time) once per meta write.
+    static $bumped = false;
+    if ( $bumped ) {
+        if ( ! has_action( 'shutdown', 'brikpanel_bump_data_cache_ver' ) ) {
+            add_action( 'shutdown', 'brikpanel_bump_data_cache_ver', PHP_INT_MAX );
+        }
+        return;
+    }
+    $bumped = true;
+    brikpanel_bump_data_cache_ver();
+}
+
+/**
+ * Write the next shared data version. Use brikpanel_bust_data_caches().
+ *
+ * @return void
+ */
+function brikpanel_bump_data_cache_ver() {
+    // Fresh read, so a bump made by another request since this one loaded
+    // the value is not written back over.
+    wp_cache_delete( 'brikpanel_data_cache_ver', 'options' );
+    update_option( 'brikpanel_data_cache_ver', (int) get_option( 'brikpanel_data_cache_ver', 1 ) + 1, false );
+}
+/**
+ * Drop the topbar notification-bell counts cache (Brikpanel_Dashboard_Topbar).
+ *
+ * New orders and status changes already invalidate it through the shared data
+ * version. These cover the rest of what the bell counts: orders trashed,
+ * restored or deleted, and products going in or out of stock or publication.
+ * Lives here, not in the topbar file, because that file only loads in wp-admin
+ * while stock and orders also change at checkout, over REST and in cron.
+ *
+ * @return void
+ */
+function brikpanel_flush_topbar_counts() {
+    // Coalesced like brikpanel_bust_data_caches(): once now, and once more at
+    // shutdown if anything else changed later in the same request.
+    static $done = false;
+    if ( $done ) {
+        if ( ! has_action( 'shutdown', 'brikpanel_delete_topbar_counts' ) ) {
+            add_action( 'shutdown', 'brikpanel_delete_topbar_counts', PHP_INT_MAX );
+        }
+        return;
+    }
+    $done = true;
+    brikpanel_delete_topbar_counts();
+}
+
+/**
+ * Delete the topbar counts transient. Use brikpanel_flush_topbar_counts().
+ *
+ * @return void
+ */
+function brikpanel_delete_topbar_counts() {
+    delete_transient( 'brikpanel_topbar_counts' );
+    delete_transient( 'brikpanel_topbar_new_customers' );
+}
+add_action( 'woocommerce_trash_order',              'brikpanel_flush_topbar_counts' );
+add_action( 'woocommerce_untrash_order',            'brikpanel_flush_topbar_counts' );
+add_action( 'woocommerce_delete_order',             'brikpanel_flush_topbar_counts' );
+add_action( 'woocommerce_product_set_stock_status', 'brikpanel_flush_topbar_counts' );
+add_action( 'transition_post_status', static function ( $new_status, $old_status, $post ) {
+    // shop_order covers a legacy (non-HPOS) order restored from the trash,
+    // which fires no order-specific hook.
+    if ( $new_status !== $old_status && $post instanceof WP_Post && ( 'product' === $post->post_type || 'shop_order' === $post->post_type ) ) {
+        brikpanel_flush_topbar_counts();
+        // Into or out of the trash only: the legacy orders screen trashes
+        // with wp_trash_post() and restores with wp_untrash_post(), which
+        // fire no order hook. Every other transition already reaches
+        // brikpanel_bust_data_caches() through one.
+        if ( 'shop_order' === $post->post_type && ( 'trash' === $old_status || 'trash' === $new_status ) ) {
+            brikpanel_bust_data_caches();
+        }
+    }
+}, 10, 3 );
+// Legacy permanent delete (wp_delete_post() from the orders screen) fires no
+// order hook either. The post still exists here, so its type is known.
+add_action( 'delete_post', static function ( $post_id ) {
+    if ( 'shop_order' === get_post_type( $post_id ) ) {
+        brikpanel_bust_data_caches();
+    }
+} );
+
+add_action( 'woocommerce_new_order',            'brikpanel_bust_data_caches' );
+add_action( 'woocommerce_order_status_changed', 'brikpanel_bust_data_caches' );
+add_action( 'woocommerce_order_refunded',       'brikpanel_bust_data_caches' );
+// Trashing, restoring or deleting an order changes no status through
+// set_status(), so the hooks above miss it: without these a deleted test
+// order kept counting (and kept the new-store guide away) until the cached
+// figures expired.
+add_action( 'woocommerce_trash_order',          'brikpanel_bust_data_caches' );
+add_action( 'woocommerce_untrash_order',        'brikpanel_bust_data_caches' );
+add_action( 'woocommerce_delete_order',         'brikpanel_bust_data_caches' );
+
+/**
+ * Bust the shared data cache when a product's cost of goods changes so the
+ * dashboard Profit section reflects new costs immediately instead of after
+ * the cache TTL. Fires for every write path (BrikPanel editor, import,
+ * programmatic update) since it hooks the meta change itself.
+ *
+ * @param int    $meta_id    Unused.
+ * @param int    $object_id  Unused.
+ * @param string $meta_key   Meta key that changed.
+ */
+function brikpanel_bust_data_caches_on_cogs_meta( $meta_id, $object_id, $meta_key ) {
+    if ( '_cogs_value_is_additive' === $meta_key || in_array( $meta_key, brikpanel_cogs_meta_keys(), true ) ) {
+        brikpanel_bust_data_caches();
+    }
+}
+add_action( 'added_post_meta',   'brikpanel_bust_data_caches_on_cogs_meta', 10, 3 );
+add_action( 'updated_post_meta', 'brikpanel_bust_data_caches_on_cogs_meta', 10, 3 );
+add_action( 'deleted_post_meta', 'brikpanel_bust_data_caches_on_cogs_meta', 10, 3 );
+
+/**
+ * Third-party cost-of-goods plugins BrikPanel knows how to read from.
+ *
+ * Plenty of stores filled in their product costs long before they installed
+ * BrikPanel, using a dedicated cost plugin that keeps the value in its own
+ * meta key. Without this registry every one of those costs is invisible:
+ * the product-list Cost column stays blank and the dashboard reports the
+ * whole catalogue as zero-cost, which silently overstates Net profit.
+ *
+ * Detection is by class/function signature rather than the plugin file path
+ * so renamed folders and white-labelled builds still resolve, and it stays a
+ * pure in-memory check (no option read, no filesystem hit) because the key
+ * list is consulted on hot paths.
+ *
+ * Each entry: `key` (meta key holding the unit cost), `post_key` (the name of
+ * the input that plugin injects into WooCommerce's Product data panel, or ''
+ * when it has none), `label` (human name, kept untranslated on purpose — it is
+ * a product name) and `active`.
+ *
+ * `post_key` exists because BrikPanel's editor renders WooCommerce's Product
+ * data panels inline, which drags the cost plugin's OWN cost input into the
+ * form alongside BrikPanel's. That input is never hydrated from what the
+ * merchant types in BrikPanel's Cost field, so on save the plugin persists its
+ * stale value (usually 0) over the real one. Knowing the input name lets the
+ * save handler hand the plugin the correct number instead of fighting it.
+ *
+ * @return array<string,array{key:string,post_key:string,label:string,active:bool}>
+ */
+function brikpanel_cogs_third_party_sources() {
+    $sources = array(
+        // Cost of Goods for WooCommerce (WPFactory, formerly Algoride).
+        // Class renamed WPFCOGS in 4.x; the Alg_* names cover 2.x/3.x.
+        'wpfactory' => array(
+            'key'                => '_alg_wc_cog_cost',
+            'post_key'           => '_alg_wc_cog_cost',
+            'variation_post_key' => 'variable_wpfcogs_cost',
+            'label'              => 'Cost of Goods for WooCommerce',
+            'active'             => class_exists( 'WPFCOGS' )
+                || function_exists( 'wpfcogs' )
+                || class_exists( 'Alg_WC_Cost_of_Goods' )
+                || function_exists( 'alg_wc_cost_of_goods' ),
+        ),
+        // WooCommerce Cost of Goods (SkyVerge / woocommerce.com extension).
+        // No variation input name here: it is unverified, and guessing wrong
+        // would write a cost into an unrelated field. The post-save re-assert
+        // covers the variation case for it.
+        'skyverge' => array(
+            'key'                => '_wc_cog_cost',
+            'post_key'           => '_wc_cog_cost',
+            'variation_post_key' => '',
+            'label'              => 'WooCommerce Cost of Goods',
+            'active'             => class_exists( 'WC_COG' ) || function_exists( 'wc_cost_of_goods' ),
+        ),
+    );
+
+    /**
+     * Filter the registry of third-party cost-of-goods plugins.
+     *
+     * Use this to teach BrikPanel about a cost plugin it does not ship
+     * support for; set `active` to true to switch the entry on.
+     *
+     * @param array<string,array{key:string,label:string,active:bool}> $sources
+     */
+    return (array) apply_filters( 'brikpanel_cogs_third_party_sources', $sources );
+}
+
+/**
+ * The two cost meta keys BrikPanel OWNS — the ones it writes on every save
+ * and keeps mirrored to each other.
+ *
+ * Deliberately excludes third-party keys. Those are read-only inputs: a cost
+ * plugin's own screen saves through a WC_Product object, and WooCommerce
+ * rewrites `_cogs_total_value` from that object's (stale) cogs_value prop at
+ * the very end of save(). Mirroring into the native key mid-save therefore
+ * gets clobbered and, worse, the clobbered value propagates straight back out
+ * — reverting the cost the merchant just typed into their own plugin. Reading
+ * their key instead of writing near it keeps BrikPanel out of that fight.
+ *
+ * @return string[]
+ */
+function brikpanel_cogs_owned_meta_keys() {
+    return array( '_cogs_total_value', '_brikpanel_cogs' );
+}
+
+/**
+ * Every meta key BrikPanel treats as a product's unit cost, in priority
+ * order (first non-empty wins).
+ *
+ * A detected third-party cost plugin leads, because that plugin's own field
+ * is the screen the merchant actually types costs into — it is their source
+ * of truth, and deferring to it is what makes an existing costed catalogue
+ * show up in BrikPanel at all. WooCommerce's native `_cogs_total_value` and
+ * BrikPanel's legacy `_brikpanel_cogs` follow. In practice the ordering
+ * rarely bites: BrikPanel's own save writes the whole set (see
+ * brikpanel_set_product_cogs_raw()), so an edit made here lands in the cost
+ * plugin's field too and the keys stay equal in both directions.
+ *
+ * A store whose cost lives somewhere else entirely can point every BrikPanel
+ * surface — per-product AND the dashboard aggregates — at it in one line:
+ *
+ *     add_filter( 'brikpanel_cogs_meta_keys', function ( $keys ) {
+ *         array_unshift( $keys, '_my_cost_meta' );
+ *         return $keys;
+ *     } );
+ *
+ * @return string[] Ordered, de-duplicated meta keys (never empty).
+ */
+function brikpanel_cogs_meta_keys() {
+    static $cache = null;
+    static $cached_late = false;
+
+    // The list is read per product row, so it is memoised — but only once the
+    // stack is fully up. BrikPanel loads alphabetically before most cost
+    // plugins, and integrators register their filter on plugins_loaded/init,
+    // so caching an early call would freeze a detection result taken before
+    // anyone had a chance to declare themselves.
+    $late = did_action( 'init' ) > 0;
+    if ( null !== $cache && $cached_late && $late ) {
+        return $cache;
+    }
+
+    $keys = array();
+
+    foreach ( brikpanel_cogs_third_party_sources() as $source ) {
+        if ( ! empty( $source['active'] ) && ! empty( $source['key'] ) ) {
+            $keys[] = (string) $source['key'];
+        }
+    }
+
+    $keys = array_merge( $keys, brikpanel_cogs_owned_meta_keys() );
+
+    /**
+     * Filter the ordered list of meta keys BrikPanel reads product cost from.
+     *
+     * @param string[] $keys Meta keys, highest priority first.
+     */
+    $keys = (array) apply_filters( 'brikpanel_cogs_meta_keys', $keys );
+
+    // Harden: these strings are interpolated into SQL by the join builder, so
+    // anything that is not a well-formed meta key is dropped outright rather
+    // than escaped — a filter cannot smuggle SQL in through this list. If a
+    // filter leaves nothing usable we fall back to BrikPanel's own keys, so
+    // the accessors and the aggregates always have something to read.
+    $clean = array();
+    foreach ( $keys as $key ) {
+        $key = is_string( $key ) ? trim( $key ) : '';
+        if ( '' !== $key && preg_match( '/^[A-Za-z0-9_\-]{1,255}$/', $key ) ) {
+            $clean[] = $key;
+        }
+    }
+    $clean = array_values( array_unique( $clean ) );
+    if ( empty( $clean ) ) {
+        $clean = brikpanel_cogs_owned_meta_keys();
+    }
+
+    $cache       = $clean;
+    $cached_late = $late;
+
+    return $cache;
+}
+
+/**
+ * Meta keys the BrikPanel product search scans alongside the post title and
+ * content.
+ *
+ * WooCommerce keeps the SKU in `_sku`, which is all BrikPanel looks at out of
+ * the box. Stores that also stamp a supplier code, a manufacturer part number
+ * or an EAN onto their products can let warehouse staff find a product by any
+ * of them in one line:
+ *
+ *     add_filter( 'brikpanel_product_search_meta_keys', function ( $keys, $term ) {
+ *         $keys[] = '_manufacturer_sku';
+ *         return $keys;
+ *     }, 10, 2 );
+ *
+ * The same list drives BOTH halves of the search clause: a product's own meta
+ * and its variations' meta, where a hit returns the parent product. Simple and
+ * variable products therefore behave identically.
+ *
+ * Not memoised on purpose: this runs once per search query, so a cache would
+ * save nothing, and the $term argument means a site may legitimately return a
+ * different list per term. Do not add a static cache here.
+ *
+ * @param string $term The raw search term being run, so a site can widen the
+ *                     scan only for terms that look like its own identifiers.
+ * @return string[] Ordered, de-duplicated meta keys (never empty, at most 10).
+ */
+function brikpanel_product_search_meta_keys( $term = '' ) {
+    $keys = array( '_sku' );
+
+    /**
+     * Filter the meta keys the BrikPanel product search scans.
+     *
+     * @param string[] $keys Meta keys to scan. Defaults to array( '_sku' ).
+     * @param string   $term The raw search term being run.
+     */
+    $keys = (array) apply_filters( 'brikpanel_product_search_meta_keys', $keys, (string) $term );
+
+    // Harden: these strings reach a meta_key position in the search SQL, so
+    // anything that is not a well-formed meta key is dropped outright rather
+    // than escaped. A filter cannot smuggle SQL in through this list. If a
+    // filter leaves nothing usable we fall back to WooCommerce's own SKU key,
+    // so the caller always has something to build a clause from and `IN ()`
+    // can never be emitted.
+    $clean = array();
+    foreach ( $keys as $key ) {
+        $key = is_string( $key ) ? trim( $key ) : '';
+        if ( '' !== $key && preg_match( '/^[A-Za-z0-9_\-]{1,255}$/', $key ) ) {
+            $clean[] = $key;
+        }
+    }
+    $clean = array_values( array_unique( $clean ) );
+    if ( empty( $clean ) ) {
+        $clean = array( '_sku' );
+    }
+
+    // Hard cap. Every extra key adds its whole meta_key range to a
+    // `LIKE '%term%'` scan that no index can help, and it does so twice (own
+    // meta plus variation meta). Ten covers SKU, supplier code, MPN, EAN and a
+    // handful of legacy fields; beyond that a single filter could turn every
+    // keystroke in the search box into a full postmeta scan. Deliberately not
+    // filterable: a store that needs more identifiers should use the $term
+    // argument to widen the scan only for terms that warrant it.
+    if ( count( $clean ) > 10 ) {
+        $clean = array_slice( $clean, 0, 10 );
+    }
+
+    return $clean;
+}
+
+/**
+ * Table, object column and primary key of a WordPress / WooCommerce meta table,
+ * for the SQL builders below. Whitelisted so no caller-supplied string ever
+ * becomes a table or column name.
+ *
+ * @param string $scope 'post' (postmeta), 'order' (HPOS wc_orders_meta),
+ *                      'order_item' (woocommerce_order_itemmeta) or 'user'.
+ * @return array{table:string,object:string,pk:string}
+ */
+function brikpanel_sql_meta_table( $scope ) {
+    global $wpdb;
+
+    switch ( $scope ) {
+        case 'order':
+            return array( 'table' => "{$wpdb->prefix}wc_orders_meta", 'object' => 'order_id', 'pk' => 'id' );
+        case 'order_item':
+            return array( 'table' => "{$wpdb->prefix}woocommerce_order_itemmeta", 'object' => 'order_item_id', 'pk' => 'meta_id' );
+        case 'user':
+            return array( 'table' => $wpdb->usermeta, 'object' => 'user_id', 'pk' => 'umeta_id' );
+        default:
+            return array( 'table' => $wpdb->postmeta, 'object' => 'post_id', 'pk' => 'meta_id' );
+    }
+}
+
+/**
+ * SQL condition that keeps only the FIRST row of a meta key per object.
+ *
+ * Nothing stops a meta key from being stored twice on the same post or order:
+ * an importer writing with add_post_meta(), another plugin, two saves racing
+ * each other. A plain `JOIN meta ON object = x AND meta_key = 'k'` then turns
+ * one order line into two, and every SUM or COUNT in the query doubles: a
+ * cost of 8.99 × 5 was reported as 89.90. WordPress itself only ever reads the
+ * first row (get_post_meta( $id, $key, true ) loads meta ordered by meta_id),
+ * so pinning the aggregate to that same row makes reports and product screens
+ * agree even on a store with duplicate rows.
+ *
+ * Written as a NOT EXISTS on a lower primary key, not `pk = (SELECT MIN(pk))`:
+ * the MIN form made MariaDB abandon the post_id index for the join (measured
+ * 5.5× slower), while this one leaves the outer plan untouched and only runs
+ * for rows the join actually matched. Works in an ON clause or a WHERE clause.
+ *
+ * @param string $scope See brikpanel_sql_meta_table().
+ * @param string $alias Alias of the meta table in the outer query.
+ * @return string SQL condition, without a leading AND.
+ */
+function brikpanel_sql_first_meta_guard( $scope, $alias ) {
+    // Aliases are always literals written by BrikPanel; anything else is a bug
+    // and must not reach the query text.
+    if ( ! is_string( $alias ) || ! preg_match( '/^[A-Za-z_][A-Za-z0-9_]{0,60}$/', $alias ) ) {
+        return '1=1';
+    }
+
+    $t   = brikpanel_sql_meta_table( $scope );
+    $dup = $alias . '_dup';
+
+    return "NOT EXISTS (SELECT 1 FROM {$t['table']} {$dup}"
+        . " WHERE {$dup}.{$t['object']} = {$alias}.{$t['object']}"
+        . " AND {$dup}.meta_key = {$alias}.meta_key"
+        . " AND {$dup}.{$t['pk']} < {$alias}.{$t['pk']})";
+}
+
+/**
+ * JOIN clause for one meta key that can never match more than one row per
+ * object. See brikpanel_sql_first_meta_guard() for why.
+ *
+ * @param string $scope       See brikpanel_sql_meta_table().
+ * @param string $alias       Alias for the joined meta table.
+ * @param string $object_expr SQL expression for the object id (already safe SQL).
+ * @param string $meta_key    Meta key to join.
+ * @param string $extra_on    Optional extra ON condition (already safe SQL).
+ * @param string $join        'LEFT' or 'INNER'.
+ * @return string
+ */
+function brikpanel_sql_single_meta_join( $scope, $alias, $object_expr, $meta_key, $extra_on = '', $join = 'LEFT' ) {
+    $t        = brikpanel_sql_meta_table( $scope );
+    $join     = 'INNER' === strtoupper( (string) $join ) ? 'INNER' : 'LEFT';
+    $meta_key = is_string( $meta_key ) && preg_match( '/^[A-Za-z0-9_\-]{1,255}$/', $meta_key ) ? $meta_key : '';
+
+    if ( ! is_string( $alias ) || ! preg_match( '/^[A-Za-z_][A-Za-z0-9_]{0,60}$/', $alias ) ) {
+        $alias = 'bp_meta';
+    }
+
+    return "\n\t\t{$join} JOIN {$t['table']} {$alias}"
+        . "\n\t\t\tON {$alias}.{$t['object']} = {$object_expr}"
+        . "\n\t\t   AND {$alias}.meta_key = '" . esc_sql( $meta_key ) . "'"
+        . ( '' !== $extra_on ? "\n\t\t   AND {$extra_on}" : '' )
+        . "\n\t\t   AND " . brikpanel_sql_first_meta_guard( $scope, $alias );
+}
+
+/**
+ * SQL fragments that resolve a product's cost across every known cost meta
+ * key, for the aggregate queries that cannot afford a per-row PHP lookup.
+ *
+ * Returns one LEFT JOIN per key plus a COALESCE expression picking the first
+ * non-empty value in the same priority order brikpanel_product_cogs_raw()
+ * uses, so the dashboard totals and the per-product surfaces can never
+ * disagree. Stores without a third-party cost plugin get exactly the two
+ * joins they always had — the extra cost is opt-in by installation.
+ *
+ * Each join matches at most ONE row per key (the first, as get_post_meta()
+ * reads it), so a cost stored twice on a product is still counted once.
+ *
+ * @param string $alias_prefix Short unique alias stem (e.g. 'vc', 'pc').
+ * @param string $post_id_expr SQL expression for the post id to join on.
+ * @param string $extra_on     Optional extra ON condition (already safe SQL).
+ * @return array{joins:string,value:string}
+ */
+function brikpanel_cogs_sql_join_set( $alias_prefix, $post_id_expr, $extra_on = '' ) {
+    $joins  = '';
+    $values = array();
+    $i      = 0;
+
+    foreach ( brikpanel_cogs_meta_keys() as $key ) {
+        $alias    = $alias_prefix . $i;
+        $joins   .= brikpanel_sql_single_meta_join( 'post', $alias, $post_id_expr, $key, $extra_on );
+        $values[] = "NULLIF({$alias}.meta_value, '')";
+        $i++;
+    }
+
+    return array(
+        'joins' => $joins,
+        'value' => 'COALESCE(' . implode( ', ', $values ) . ')',
+    );
+}
+
+/**
+ * Keep the cost meta keys BrikPanel owns in lockstep on products and
+ * variations.
+ *
+ * BrikPanel's own `_brikpanel_cogs` and WooCommerce's native
+ * `_cogs_total_value` (WC 9.5+) describe the same number but are written by
+ * different screens — BrikPanel's editor and Quick Edit on one side, the
+ * WooCommerce product screen on the other. Whichever the merchant uses, this
+ * copies the value across so the cost shows up everywhere at once and the
+ * dashboard never reports a costed catalogue as zero-cost. It also covers the
+ * case where WC's Cost of Goods feature flag is off. WC_Product::set_cogs_value()
+ * then stores nothing and, on AJAX and REST requests, also writes a
+ * "called incorrectly" line to the PHP error log, which is why BrikPanel checks
+ * brikpanel_wc_cogs_enabled() before calling it.
+ *
+ * Scope is deliberately brikpanel_cogs_owned_meta_keys(), NOT every key
+ * BrikPanel can read — see that function for why writing near a third-party
+ * cost plugin's key is harmful.
+ *
+ * Semantics match on both sides: an empty value / deleted row means "no cost
+ * on file" (a variation then inherits its parent), so a clear propagates as a
+ * delete rather than a stored empty string.
+ *
+ * Only products and variations are mirrored: WooCommerce also stores
+ * `_cogs_total_value` on ORDERS, which must never bleed into product cost meta.
+ *
+ * Loop safety comes from a re-entrancy guard plus a real-change test on every
+ * write, so the ring settles in a single pass instead of bouncing.
+ *
+ * @param int    $meta_id    Unused (an array of ids on the delete hook).
+ * @param int    $object_id  Product or variation ID whose meta changed.
+ * @param string $meta_key   Meta key that changed.
+ * @param mixed  $meta_value New value ('' on delete / clear).
+ */
+function brikpanel_mirror_cogs_meta( $meta_id, $object_id, $meta_key, $meta_value = '' ) {
+    static $mirroring = false;
+
+    if ( $mirroring ) {
+        return;
+    }
+
+    $keys = brikpanel_cogs_owned_meta_keys();
+    if ( ! in_array( (string) $meta_key, $keys, true ) ) {
+        return;
+    }
+    if ( ! in_array( get_post_type( $object_id ), array( 'product', 'product_variation' ), true ) ) {
+        return;
+    }
+
+    $source    = (string) $meta_value;
+    $formatted = '' === $source ? '' : wc_format_decimal( $source );
+
+    $mirroring = true;
+    try {
+        foreach ( $keys as $key ) {
+            if ( $key === $meta_key ) {
+                continue;
+            }
+            $current = (string) get_post_meta( $object_id, $key, true );
+
+            // Cleared on the source side (variation now inherits its parent,
+            // or the merchant emptied the field) -> drop the mirrored copies
+            // so the parent fallback kicks back in instead of a stale cost.
+            if ( '' === $formatted ) {
+                if ( '' !== $current ) {
+                    delete_post_meta( $object_id, $key );
+                }
+                continue;
+            }
+
+            // Compare as floats so 12.5 and 12.50 do not ping-pong, and only
+            // write on a real change (which also skips a cache bust for free).
+            if ( '' === $current || (float) $current !== (float) $formatted ) {
+                update_post_meta( $object_id, $key, $formatted );
+            }
+        }
+    } finally {
+        $mirroring = false;
+    }
+}
+add_action( 'added_post_meta',   'brikpanel_mirror_cogs_meta', 10, 4 );
+add_action( 'updated_post_meta', 'brikpanel_mirror_cogs_meta', 10, 4 );
+add_action( 'deleted_post_meta', 'brikpanel_mirror_cogs_meta', 10, 4 );
+
+/**
+ * Remove the extra cost row the mirror leaves behind when a product is CREATED
+ * with both cost keys at once.
+ *
+ * WC_Product_Data_Store_CPT::create() writes props (the native cost) before it
+ * saves plain meta. The native write fires the mirror, which adds
+ * `_brikpanel_cogs`; a moment later save_meta_data() adds the object's own
+ * `_brikpanel_cogs` again, so the new product ends up with two rows. This is
+ * what WooCommerce's "Duplicate" action and a CSV import of a BrikPanel export
+ * both do, on simple products and on every variation.
+ *
+ * Runs on woocommerce_new_product(_variation), which fires after the meta save.
+ * Touches only BrikPanel-owned keys, only when every row holds the same number,
+ * and never deletes a row the product object itself references, so a later
+ * save of that same object still updates an existing row. Deleted raw: going through
+ * delete_metadata_by_mid() would fire the mirror with the removed value.
+ *
+ * @param int        $product_id Newly created product or variation ID.
+ * @param WC_Product $product    The product object that was saved.
+ */
+function brikpanel_collapse_created_product_cogs_rows( $product_id, $product = null ) {
+    global $wpdb;
+
+    $product_id = (int) $product_id;
+    if ( $product_id <= 0 ) {
+        return;
+    }
+
+    $keys  = brikpanel_cogs_owned_meta_keys();
+    $holds = implode( ',', array_fill( 0, count( $keys ), '%s' ) );
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+    $rows = $wpdb->get_results( $wpdb->prepare(
+        "SELECT meta_id, meta_key, meta_value FROM {$wpdb->postmeta}
+         WHERE post_id = %d AND meta_key IN ({$holds})
+         ORDER BY meta_id ASC",
+        array_merge( array( $product_id ), $keys )
+    ) );
+
+    $by_key = array();
+    foreach ( (array) $rows as $row ) {
+        $by_key[ $row->meta_key ][] = $row;
+    }
+
+    $referenced = array();
+    if ( $product instanceof WC_Data ) {
+        foreach ( $product->get_meta_data() as $meta ) {
+            if ( in_array( $meta->key, $keys, true ) && ! empty( $meta->id ) ) {
+                $referenced[ (int) $meta->id ] = true;
+            }
+        }
+    }
+
+    $delete = array();
+    foreach ( $by_key as $key_rows ) {
+        if ( count( $key_rows ) < 2 ) {
+            continue;
+        }
+        $first = (float) $key_rows[0]->meta_value;
+        foreach ( $key_rows as $row ) {
+            if ( '' === (string) $row->meta_value || (float) $row->meta_value !== $first ) {
+                continue 2;
+            }
+        }
+        // A row the product object references is never deleted: a later save
+        // of that same object updates meta by id and would silently lose the
+        // write. Only the rows nothing points at (the mirror's) go, and one row
+        // always stays. A source product that already had two referenced rows
+        // keeps both on its copy; the BrikControl check handles that case.
+        $keep_any = false;
+        foreach ( $key_rows as $row ) {
+            if ( isset( $referenced[ (int) $row->meta_id ] ) ) {
+                $keep_any = true;
+                break;
+            }
+        }
+        foreach ( $key_rows as $i => $row ) {
+            $id = (int) $row->meta_id;
+            if ( isset( $referenced[ $id ] ) ) {
+                continue;
+            }
+            if ( ! $keep_any && 0 === $i ) {
+                continue;
+            }
+            $delete[] = $id;
+        }
+    }
+
+    if ( empty( $delete ) ) {
+        return;
+    }
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+    $wpdb->query( "DELETE FROM {$wpdb->postmeta} WHERE post_id = {$product_id} AND meta_id IN (" . implode( ',', $delete ) . ')' );
+    wp_cache_delete( $product_id, 'post_meta' );
+    if ( class_exists( 'WC_Cache_Helper' ) ) {
+        WC_Cache_Helper::invalidate_cache_group( 'object_' . $product_id );
+    }
+}
+add_action( 'woocommerce_new_product',           'brikpanel_collapse_created_product_cogs_rows', 10, 2 );
+add_action( 'woocommerce_new_product_variation', 'brikpanel_collapse_created_product_cogs_rows', 10, 2 );
+
+/**
+ * The cost defined directly on ONE product or variation post — no parent
+ * fallback, no additive math. Walks brikpanel_cogs_meta_keys() in priority
+ * order (WooCommerce native, then BrikPanel's legacy key, then any detected
+ * third-party cost plugin) and returns the first value on file. Reading raw
+ * meta instead of WC_Product::get_cogs_value() keeps this working even when
+ * the merchant has switched WooCommerce's Cost of Goods Sold feature off —
+ * the data stays in the database either way.
+ *
+ * @param int $post_id Product or variation ID.
+ * @return string Decimal string, or '' when no cost is on file.
+ */
+function brikpanel_product_cogs_raw( $post_id ) {
+    $post_id = (int) $post_id;
+
+    foreach ( brikpanel_cogs_meta_keys() as $key ) {
+        $value = (string) get_post_meta( $post_id, $key, true );
+        if ( '' !== $value ) {
+            return $value;
+        }
+    }
+
+    return '';
+}
+
+/**
+ * Write (or clear) the cost on ONE product or variation post across every
+ * known cost meta key.
+ *
+ * The live mirror already propagates a single write to the other keys, but it
+ * can only react to a write that actually happened: clearing a cost that
+ * exists ONLY in a third-party plugin's key would delete nothing on
+ * BrikPanel's own key, fire no hook, and leave the old cost in place — the
+ * field would helpfully repopulate itself on the next page load. Writing the
+ * whole set explicitly makes "cleared" mean cleared everywhere.
+ *
+ * @param int         $post_id Product or variation ID.
+ * @param string|null $value   Raw user input; '' or null clears the cost.
+ * @return string Normalised decimal actually stored ('' when cleared).
+ */
+function brikpanel_set_product_cogs_raw( $post_id, $value ) {
+    $post_id = (int) $post_id;
+    $decimal = ( null === $value || '' === $value ) ? '' : wc_format_decimal( $value );
+
+    foreach ( brikpanel_cogs_meta_keys() as $key ) {
+        if ( '' === $decimal ) {
+            delete_post_meta( $post_id, $key );
+            continue;
+        }
+        $current = (string) get_post_meta( $post_id, $key, true );
+        if ( '' === $current || (float) $current !== (float) $decimal ) {
+            update_post_meta( $post_id, $key, $decimal );
+        }
+    }
+
+    return $decimal;
+}
+
+/**
+ * Hand any cost plugin whose input is riding along in THIS submission the
+ * value the merchant actually typed into BrikPanel's Cost field.
+ *
+ * BrikPanel's editor renders WooCommerce's Product data panels inline for
+ * compatibility, so a cost plugin's own cost input is submitted with the form
+ * even though the merchant never sees or edits it — it still holds whatever it
+ * rendered with (0 on a product that had no cost in that plugin yet). The
+ * plugin's save handler then writes that stale number over the real one, and
+ * because its key is read first the cost the merchant just typed vanishes on
+ * the next page load.
+ *
+ * Correcting `$_POST` rather than racing the write means the plugin persists
+ * the right number through its OWN pipeline, so its derived fields (profit,
+ * margin) come out right too. Only inputs actually present in the submission
+ * are touched: injecting a key that was never posted would make a plugin save
+ * a cost the merchant did not ask it to.
+ *
+ * Variations work the same way, one level deeper: the plugin reads
+ * `$_POST['<field>'][$loop]`, so pass the loop index the editor is about to
+ * hand `woocommerce_save_product_variation`.
+ *
+ * @param string   $decimal    Normalised cost ('' when the merchant cleared it).
+ * @param int|null $loop_index Variation loop index, or null for the parent/simple product.
+ */
+function brikpanel_cogs_sync_posted_third_party_inputs( $decimal, $loop_index = null ) {
+    foreach ( brikpanel_cogs_third_party_sources() as $source ) {
+        if ( empty( $source['active'] ) ) {
+            continue;
+        }
+
+        if ( null === $loop_index ) {
+            $key = ! empty( $source['post_key'] ) ? $source['post_key'] : '';
+            if ( '' === $key || ! isset( $_POST[ $key ] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+                continue;
+            }
+            $_POST[ $key ] = $decimal; // phpcs:ignore WordPress.Security.NonceVerification
+            continue;
+        }
+
+        $key = ! empty( $source['variation_post_key'] ) ? $source['variation_post_key'] : '';
+        if ( '' === $key || ! isset( $_POST[ $key ][ $loop_index ] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+            continue;
+        }
+        $_POST[ $key ][ $loop_index ] = $decimal; // phpcs:ignore WordPress.Security.NonceVerification
+    }
+}
+
+/**
+ * The EFFECTIVE unit cost of a product line, resolved the same way the
+ * profit engine's SQL does: variation cost first, parent product cost as
+ * fallback, and WooCommerce's additive-variation flag honoured (variation
+ * cost added on top of the parent's when `_cogs_value_is_additive` is yes).
+ *
+ * This is the single integration point for cost: the result runs through the
+ * `brikpanel_product_cogs` filter, so a store that computes cost rather than
+ * storing it can point every BrikPanel per-product read at its own logic from
+ * one hook. (The dashboard aggregates resolve cost in SQL for performance, so
+ * this filter only reaches per-product surfaces — to move EVERY surface,
+ * including the aggregates, add the meta key to `brikpanel_cogs_meta_keys`
+ * instead.)
+ *
+ * @param int $product_id   Parent (or simple) product ID.
+ * @param int $variation_id Variation ID, 0 for simple products.
+ * @return float|null Unit cost, or null when no cost is on file at all.
+ */
+function brikpanel_product_cogs( $product_id, $variation_id = 0 ) {
+    $product_id   = (int) $product_id;
+    $variation_id = (int) $variation_id;
+
+    $pval = '' !== ( $p = brikpanel_product_cogs_raw( $product_id ) ) ? (float) $p : null;
+    $cost = $pval;
+
+    if ( $variation_id > 0 ) {
+        $vval = '' !== ( $v = brikpanel_product_cogs_raw( $variation_id ) ) ? (float) $v : null;
+        if ( 'yes' === get_post_meta( $variation_id, '_cogs_value_is_additive', true ) ) {
+            $cost = ( null === $vval && null === $pval ) ? null : (float) $vval + (float) $pval;
+        } else {
+            $cost = ( null !== $vval ) ? $vval : $pval;
+        }
+    }
+
+    /**
+     * Filter the resolved unit cost BrikPanel uses for a product line.
+     *
+     * @param float|null $cost         Resolved cost (null = no cost on file).
+     * @param int        $product_id   Parent (or simple) product ID.
+     * @param int        $variation_id Variation ID (0 for simple products).
+     */
+    return apply_filters( 'brikpanel_product_cogs', $cost, $product_id, $variation_id );
+}
+
+/**
+ * Whether BrikPanel's own front-end visitor tracking is enabled.
+ *
+ * Gates every storefront beacon and counter: the daily visitor / page-view /
+ * product-view scripts, the live-visitor ping, the checkout counter and both
+ * add-to-cart counters. Stores that already run a dedicated analytics plugin
+ * can switch all of it off from WooCommerce ▸ Settings ▸ BrikPanel ▸
+ * Analytics; the dashboard cards those counters feed then simply stop
+ * receiving new data. Defaults to on so existing installs are unaffected.
+ *
+ * @return bool
+ */
+function brikpanel_frontend_tracking_enabled() {
+    return get_option( 'brikpanel_frontend_tracking', 'yes' ) !== 'no';
+}
+
+/**
+ * Whether a visitor counts as soon as a store page opens (3.3.41).
+ *
+ * Off by default: since 3.3.30 a visitor counts only after a person's first
+ * touch, mouse movement, wheel or key, which keeps bots out. A store that
+ * buys ad traffic compares Visitors with the ad platform's landing page
+ * views, which count every page that opened, so for social traffic (many
+ * leave without touching) Visitors read about half and the conversion rate
+ * about double (imaddd, October 2026). With this on, the tracker also sends
+ * one request when the page is on screen; the server counts the day's
+ * visitor, product view, page view and campaign from it with every other
+ * check intact (bot names, cloud addresses, cross-site posts, the daily lock
+ * of a browser without cookies), but issues no "this is a person" mark: the
+ * add-to-cart and checkout counters still wait for a real input.
+ * WooCommerce ▸ Settings ▸ BrikPanel ▸ Analytics.
+ *
+ * @since 3.3.41
+ *
+ * @return bool
+ */
+function brikpanel_count_on_open_enabled() {
+    return 'yes' === get_option( 'brikpanel_count_on_open', 'no' );
+}
+
+/**
+ * Every order status a list of orders shows: all of WooCommerce's except the
+ * block checkout's draft, for wc_get_orders() calls that list orders.
+ *
+ * WooCommerce adds 'wc-checkout-draft' to wc_get_order_statuses(), so a query
+ * that names no status also loads the carts left on the checkout page, while
+ * WooCommerce's own orders list hides them. Up to 3.3.40 they showed in
+ * Ctrl+K and the dashboard's Excel export as orders.
+ *
+ * @since 3.3.41
+ *
+ * @return string[] wc- prefixed status keys.
+ */
+function brikpanel_listed_order_statuses() {
+    return array_values( array_diff( array_keys( wc_get_order_statuses() ), [ 'wc-checkout-draft' ] ) );
+}
+
+/**
+ * Interval, in seconds, between live-visitor pings from an open storefront tab.
+ *
+ * Clamped to 10–300: below 10 s the ping would defeat its own server-side
+ * rate limit, above 5 minutes a visitor would be considered gone (and drop
+ * off the Live widget) between two legitimate pings of the same open tab.
+ *
+ * @return int
+ */
+function brikpanel_live_ping_interval() {
+    $interval = (int) get_option( 'brikpanel_live_ping_interval', 30 );
+    return max( 10, min( 300, $interval > 0 ? $interval : 30 ) );
+}
+
+/**
+ * Whether the Live widget may store/show logged-in customer details
+ * (name, e-mail, phone) alongside the anonymous visit data.
+ *
+ * When off, live tracking still counts the visitor and shows the page and
+ * cart state, but no personal fields are cached at all — useful for stores
+ * that prefer strict data minimisation. Defaults to on (existing behaviour).
+ *
+ * @return bool
+ */
+function brikpanel_live_customer_details_enabled() {
+    return get_option( 'brikpanel_live_customer_details', 'yes' ) !== 'no';
+}
+
+/**
+ * Whether the Live visitors list shows where each visitor came from
+ * (channel and source, with the campaign and search term on hover).
+ *
+ * The storefront tracker reads it too: when off, it neither remembers the
+ * visit's entry source in the browser nor sends it, and the server stores
+ * none. Defaults to on.
+ *
+ * @return bool
+ */
+function brikpanel_live_traffic_source_enabled() {
+    return get_option( 'brikpanel_live_traffic_source', 'yes' ) !== 'no';
+}
+
+/**
+ * Option name storing the order statuses a merchant counts as valid,
+ * realised sales (revenue, order count, AOV, profit, lifetime value).
+ */
+const BRIKPANEL_PAID_STATUSES_OPTION = 'brikpanel_paid_statuses';
+
+/**
+ * Option name storing the order statuses a merchant treats as refunds.
+ */
+const BRIKPANEL_REFUNDED_STATUSES_OPTION = 'brikpanel_refunded_statuses';
+
+/**
+ * Factory defaults for the "valid sales" bucket. Processing + completed is
+ * what WooCommerce itself treats as paid for its native reports.
+ *
+ * @return string[]
+ */
+function brikpanel_default_paid_statuses() {
+    return [ 'wc-processing', 'wc-completed' ];
+}
+
+/**
+ * Factory default for the "refunded" bucket — WooCommerce's native fully
+ * refunded status.
+ *
+ * @return string[]
+ */
+function brikpanel_default_refunded_statuses() {
+    return [ 'wc-refunded' ];
+}
+
+/**
+ * Validate a raw status list: keep only non-empty strings, normalise each to
+ * the wc- prefix WooCommerce uses internally, drop duplicates. Falls back to
+ * the supplied default when nothing usable remains so analytics never query
+ * an empty status set (which would zero out every revenue figure).
+ *
+ * @param mixed    $list    Raw value (option payload or filter return).
+ * @param string[] $default Fallback list.
+ * @return string[]
+ */
+function brikpanel_normalise_statuses( $list, array $default ) {
+    if ( ! is_array( $list ) ) {
+        return $default;
+    }
+    $out = [];
+    foreach ( $list as $status ) {
+        if ( ! is_string( $status ) ) {
+            continue;
+        }
+        $status = trim( $status );
+        if ( '' === $status ) {
+            continue;
+        }
+        if ( 0 !== strpos( $status, 'wc-' ) ) {
+            $status = 'wc-' . $status;
+        }
+        $out[] = $status;
+    }
+    $out = array_values( array_unique( $out ) );
+    return empty( $out ) ? $default : $out;
+}
+
+/**
+ * Order statuses that count as realised, valid sales across every BrikPanel
+ * analytic: the headline KPI cards (Total Sales, Orders, AOV), Profit, the
+ * store summary, marketplace breakdowns and the lifetime-value engine.
+ *
+ * Merchants pick the set in BrikPanel ▸ Settings ▸ Analytics. Stores that use
+ * a shipment-tracking plugin (custom "Partially shipped" / "Delivered"
+ * statuses) or take a lot of offline payments add those statuses there so
+ * their orders stop being silently dropped from the figures.
+ *
+ * The legacy brikpanel_kpi_statuses filter still runs last for developers who
+ * set the list in code.
+ *
+ * @return string[]
+ */
+function brikpanel_paid_order_statuses() {
+    $default = brikpanel_default_paid_statuses();
+    $stored  = get_option( BRIKPANEL_PAID_STATUSES_OPTION, null );
+    $base    = ( null === $stored ) ? $default : brikpanel_normalise_statuses( $stored, $default );
+
+    /**
+     * Filter the order statuses counted as valid sales. Back-compat hook —
+     * the same list is now editable from the Analytics settings screen.
+     *
+     * @param string[] $statuses Resolved status list.
+     */
+    $filtered = apply_filters( 'brikpanel_kpi_statuses', $base );
+
+    return brikpanel_normalise_statuses( $filtered, $base );
+}
+
+/**
+ * Order statuses that announce a new order: the new-order popup and sound,
+ * and the phone notifications. The same entry points as WooCommerce's own
+ * "New order" email, so a bank transfer that waits on-hold is announced too.
+ *
+ * Not the paid statuses above: those are an analytics setting a merchant
+ * edits for reporting, and that must not change who gets told about orders.
+ *
+ * @return string[] Status slugs without the "wc-" prefix.
+ */
+function brikpanel_new_order_statuses() {
+    $default = array( 'processing', 'completed', 'on-hold' );
+
+    /**
+     * Filter the order statuses that announce a new order.
+     *
+     * @param string[] $statuses Status slugs without the "wc-" prefix.
+     */
+    $statuses = apply_filters( 'brikpanel_new_order_statuses', $default );
+
+    $out = array();
+    foreach ( (array) $statuses as $status ) {
+        $status = sanitize_key( preg_replace( '/^wc-/', '', (string) $status ) );
+        if ( '' !== $status && ! in_array( $status, $out, true ) ) {
+            $out[] = $status;
+        }
+    }
+    return $out ? $out : $default;
+}
+
+/**
+ * Order statuses a merchant treats as refunds. Used by the refund counters
+ * and folded into the lifetime-value set so refunded customers still register
+ * as having ordered.
+ *
+ * @return string[]
+ */
+function brikpanel_refunded_order_statuses() {
+    $default = brikpanel_default_refunded_statuses();
+    $stored  = get_option( BRIKPANEL_REFUNDED_STATUSES_OPTION, null );
+    $base    = ( null === $stored ) ? $default : brikpanel_normalise_statuses( $stored, $default );
+
+    /**
+     * Filter the order statuses counted as refunds.
+     *
+     * @param string[] $statuses Resolved status list.
+     */
+    $filtered = apply_filters( 'brikpanel_refunded_statuses', $base );
+
+    return brikpanel_normalise_statuses( $filtered, $base );
+}
+
+/**
+ * Statuses counted by the lifetime-value / RFM engine: every valid sale plus
+ * every refund. A refunded order still represents a customer who bought, so it
+ * belongs in the lifetime history even though its money nets out.
+ *
+ * @return string[]
+ */
+function brikpanel_ltv_counted_statuses() {
+    return array_values( array_unique( array_merge(
+        brikpanel_paid_order_statuses(),
+        brikpanel_refunded_order_statuses()
+    ) ) );
+}
+
+/**
+ * Backwards-compatible alias kept for the headline KPI callers. Delegates to
+ * the unified valid-sales set.
+ *
+ * @return string[]
+ */
+function brikpanel_kpi_revenue_statuses() {
+    return brikpanel_paid_order_statuses();
+}
+
+/**
+ * Render a status list as a SQL-safe, quoted, comma-separated fragment for an
+ * `IN (...)` clause — e.g. "'wc-processing','wc-completed'". Values originate
+ * from a fixed whitelist (registered WooCommerce statuses) and are still run
+ * through esc_sql() as defence in depth.
+ *
+ * @param string[] $statuses Status keys.
+ * @return string
+ */
+function brikpanel_statuses_sql_in( array $statuses ) {
+    $quoted = array_map(
+        static function ( $s ) {
+            return "'" . esc_sql( $s ) . "'";
+        },
+        $statuses
+    );
+    return implode( ',', $quoted );
+}
+
+/**
+ * Quoted IN-list of the valid-sales statuses, ready to interpolate into a
+ * double-quoted SQL string.
+ *
+ * @return string
+ */
+function brikpanel_paid_statuses_sql() {
+    return brikpanel_statuses_sql_in( brikpanel_paid_order_statuses() );
+}
+
+/**
+ * When the merchant changes either status bucket, invalidate every
+ * order-derived cache and queue a lifetime-value / cohort recompute so the
+ * precomputed customer table reflects the new definition without waiting for
+ * the nightly cron.
+ */
+function brikpanel_on_status_buckets_changed() {
+    brikpanel_bust_data_caches();
+    if ( ! wp_next_scheduled( 'brikpanel_recompute_customer_metrics' ) ) {
+        wp_schedule_single_event( time() + 5, 'brikpanel_recompute_customer_metrics' );
+    }
+    if ( ! wp_next_scheduled( 'brikpanel_recompute_cohort_retention' ) ) {
+        wp_schedule_single_event( time() + 10, 'brikpanel_recompute_cohort_retention' );
+    }
+}
+add_action( 'update_option_' . BRIKPANEL_PAID_STATUSES_OPTION, 'brikpanel_on_status_buckets_changed' );
+add_action( 'update_option_' . BRIKPANEL_REFUNDED_STATUSES_OPTION, 'brikpanel_on_status_buckets_changed' );
+add_action( 'add_option_' . BRIKPANEL_PAID_STATUSES_OPTION, 'brikpanel_on_status_buckets_changed' );
+add_action( 'add_option_' . BRIKPANEL_REFUNDED_STATUSES_OPTION, 'brikpanel_on_status_buckets_changed' );
+
+/**
+ * Get all administrator user IDs (users with manage_options capability).
+ * Cached in object cache for 5 minutes to avoid repeated DB queries.
+ *
+ * @return int[] Array of admin user IDs.
+ */
+function brikpanel_get_admin_user_ids() {
+    $key = 'brikpanel_admin_user_ids';
+
+    // Persistent backend selection: object cache when available, transient
+    // otherwise. Without this fallback the cache is per-request only on
+    // shared hosts → every dashboard call re-runs get_users().
+    $has_oc = brikpanel_has_object_cache();
+    $cached = $has_oc ? wp_cache_get( $key ) : get_transient( $key );
+    if ( false !== $cached ) {
+        return $cached;
+    }
+
+    $admins = get_users( [
+        'capability' => 'manage_options',
+        'fields'     => 'ID',
+    ] );
+    $admin_ids = array_map( 'intval', $admins );
+
+    if ( $has_oc ) {
+        wp_cache_set( $key, $admin_ids, '', 300 );
+    } else {
+        set_transient( $key, $admin_ids, brikpanel_cache_ttl( 300 ) );
+    }
+    return $admin_ids;
+}
+
+/**
+ * Build SQL fragments to exclude orders placed by admin users.
+ * Returns an array with 'sql' (the WHERE clause fragment) and 'args' (values for prepare).
+ * If there are no admins, returns empty sql/args so queries work unchanged.
+ *
+ * @param bool $hpos Whether HPOS is active.
+ * @param string $id_column The column/expression referencing the order ID (e.g. 'id', 'o.id', 'p.ID').
+ * @return array{sql: string, args: int[]}
+ */
+function brikpanel_admin_order_exclusion_sql( $hpos, $id_column = '' ) {
+    $admin_ids = brikpanel_get_admin_user_ids();
+    if ( empty( $admin_ids ) ) {
+        return [ 'sql' => '', 'args' => [] ];
+    }
+
+    $placeholders = implode( ', ', array_fill( 0, count( $admin_ids ), '%d' ) );
+
+    if ( $hpos ) {
+        return [
+            'sql'  => " AND customer_id NOT IN ({$placeholders})",
+            'args' => $admin_ids,
+        ];
+    }
+
+    // Legacy: exclude by _customer_user meta
+    global $wpdb;
+    $col = $id_column ?: 'ID';
+    return [
+        'sql'  => " AND {$col} NOT IN (SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_customer_user' AND meta_value IN ({$placeholders}))",
+        'args' => $admin_ids,
+    ];
+}
+
+/**
+ * Whether the BrikMarket plugin (multichannel marketplace integration) is
+ * loaded and ready. Cached per-request: dashboard counters can call this
+ * many times in a single render.
+ *
+ * @return bool
+ */
+function brikpanel_brikmarket_active() {
+    static $active = null;
+    if ( null === $active ) {
+        $active = defined( 'BRIKMARKET_VERSION' ) && class_exists( 'BrikMarket_Marketplace_Registry' );
+    }
+    return $active;
+}
+
+/**
+ * Order meta key BrikMarket sets on every imported marketplace order.
+ *
+ * Single source of truth — used by exclusion SQL and analytics breakdowns.
+ *
+ * @return string
+ */
+function brikpanel_marketplace_meta_key() {
+    return '_brksoft_marketplace';
+}
+
+/**
+ * Build SQL fragments to exclude marketplace orders (orders imported via
+ * BrikMarket) from a query. Returns empty fragment when BrikMarket is
+ * inactive — callers can append unconditionally.
+ *
+ * @param bool   $hpos      Whether HPOS is active.
+ * @param string $id_column Column referencing the order ID (e.g. 'id', 'o.id', 'p.ID').
+ * @return array{sql: string, args: array}
+ */
+function brikpanel_marketplace_order_exclusion_sql( $hpos, $id_column = '' ) {
+    if ( ! brikpanel_brikmarket_active() ) {
+        return [ 'sql' => '', 'args' => [] ];
+    }
+    global $wpdb;
+    $meta_key = brikpanel_marketplace_meta_key();
+    // Correlated NOT EXISTS rather than `NOT IN (subquery)`. NOT IN is a double
+    // footgun here: (a) if the meta subquery ever yields a NULL it makes the
+    // whole predicate UNKNOWN and silently drops EVERY row (revenue → 0), and
+    // (b) when the outer query already LEFT JOINs the very same meta table
+    // (e.g. the multi-currency base-total join in brikpanel_get_total_revenue
+    // aliases wc_orders_meta), MySQL mis-resolves the un-aliased subquery and
+    // zeroes the result. NOT EXISTS with its own alias is NULL-safe, immune to
+    // that collision, and typically faster. Equivalent meaning: exclude orders
+    // that HAVE the marketplace marker meta.
+    if ( $hpos ) {
+        $col = $id_column ?: 'id';
+        // The correlated subquery reads wc_orders_meta, which ALSO owns an `id`
+        // column. A bare/unqualified `id` from the caller binds to the
+        // subquery's OWN row id (inner scope wins), so the correlation becomes
+        // `bpmpx.order_id = bpmpx.id` — almost never true — making NOT EXISTS
+        // always pass and silently excluding NOTHING. On HPOS the orders table
+        // is always {$prefix}wc_orders, so qualify a bare id to it. Callers that
+        // alias the table (e.g. 'o.id') already pass a qualified column and are
+        // left untouched. This was a silent no-op on every marketplace-excluding
+        // KPI on HPOS stores (revenue, orders, AOV, conversion, charts).
+        if ( 'id' === $col ) {
+            $col = $wpdb->prefix . 'wc_orders.id';
+        }
+        return [
+            'sql'  => " AND NOT EXISTS (SELECT 1 FROM {$wpdb->prefix}wc_orders_meta bpmpx WHERE bpmpx.order_id = {$col} AND bpmpx.meta_key = %s)",
+            'args' => [ $meta_key ],
+        ];
+    }
+    $col = $id_column ?: 'ID';
+    return [
+        'sql'  => " AND NOT EXISTS (SELECT 1 FROM {$wpdb->postmeta} bpmpx WHERE bpmpx.post_id = {$col} AND bpmpx.meta_key = %s)",
+        'args' => [ $meta_key ],
+    ];
+}
+
+/**
+ * Static palette + label fallbacks for the marketplaces BrikMarket ships
+ * with. Used when the marketplace registry is empty (e.g. the dashboard
+ * runs before brikmarket_init has registered modules) or for branded UI
+ * accents (charts, badges).
+ *
+ * @return array<string, array{label: string, color: string}>
+ */
+function brikpanel_marketplace_palette() {
+    return [
+        'amazon'      => [ 'label' => 'Amazon',      'color' => '#ff9900' ],
+        'trendyol'    => [ 'label' => 'Trendyol',    'color' => '#f27a1a' ],
+        'hepsiburada' => [ 'label' => 'Hepsiburada', 'color' => '#ff6000' ],
+        'n11'         => [ 'label' => 'n11',         'color' => '#71BC44' ],
+        'ozon'        => [ 'label' => 'Ozon',        'color' => '#005bff' ],
+    ];
+}
+
+/**
+ * Resolve display metadata (label, brand color, optional logo URL) for a
+ * marketplace ID. Prefers the live registry value, falls back to the
+ * static palette for unknowns.
+ *
+ * @param string $marketplace_id e.g. 'trendyol', 'amazon'.
+ * @return array{label: string, color: string, logo?: string}
+ */
+function brikpanel_marketplace_meta( $marketplace_id ) {
+    $palette = brikpanel_marketplace_palette();
+    $meta    = $palette[ $marketplace_id ] ?? [
+        'label' => ucfirst( $marketplace_id ),
+        'color' => '#666666',
+    ];
+
+    if ( class_exists( 'BrikMarket_Marketplace_Registry' ) ) {
+        $mp = BrikMarket_Marketplace_Registry::get( $marketplace_id );
+        if ( $mp ) {
+            $name = (string) $mp->get_name();
+            if ( '' !== $name ) {
+                $meta['label'] = $name;
+            }
+            if ( method_exists( $mp, 'get_logo_url' ) ) {
+                $logo = (string) $mp->get_logo_url();
+                if ( '' !== $logo ) {
+                    $meta['logo'] = $logo;
+                }
+            }
+        }
+    }
+    return $meta;
+}
+
+/**
+ * Force ACF to register its per-field-group metaboxes against the given
+ * product post object. ACF only hooks `add_meta_boxes` from inside
+ * `load-post.php` / `load-post-new.php`, neither of which fires on the
+ * BrikPanel custom product editor page — so without this bridge any ACF
+ * field group targeting `product` is silently dropped from the metabox
+ * picker and from the rendered editor.
+ *
+ * Calls ACF_Form_Post::add_meta_boxes() directly so we do not add a
+ * duplicate listener on `add_meta_boxes` (which would re-emit boxes on
+ * every subsequent call during the same request).
+ *
+ * @param WP_Post|object $post A product post (or stub with ID/post_type).
+ * @param string         $post_type The post type to register boxes against. Default 'product'.
+ * @return void
+ */
+function brikpanel_bootstrap_acf_post_metaboxes( $post, $post_type = 'product' ) {
+    if ( ! function_exists( 'acf_get_instance' ) ) {
+        return;
+    }
+    $form_post = acf_get_instance( 'ACF_Form_Post' );
+    if ( ! $form_post || ! method_exists( $form_post, 'add_meta_boxes' ) ) {
+        return;
+    }
+    try {
+        $form_post->add_meta_boxes( $post_type, $post );
+    } catch ( \Throwable $e ) {
+        // Swallow — ACF misconfiguration should not break the editor page.
+    }
+}
+
+/**
+ * Resolve the ACF field group metabox IDs whose Location Rules match the
+ * given product (or the generic `product` post type when no product id is
+ * available, e.g. on the Add New screen). ACF field groups encode their
+ * own target context via Location Rules, so once an admin has configured
+ * a group for products their intent is unambiguous — the user shouldn't
+ * also have to add it manually to the BrikPanel metabox multiselect.
+ * This helper returns the matching IDs so the editor + enqueue paths can
+ * fold them into the rendered + asset list automatically.
+ *
+ * ACF's own metabox id pattern is `acf-{group_key}` (see
+ * ACF_Form_Post::add_meta_boxes()). The helper returns the same pattern
+ * so callers can merge it directly into $selected_metaboxes.
+ *
+ * Site owners can disable auto-inclusion via the
+ * `brikpanel_pe_acf_auto` option (set to 'no') or via the
+ * `brikpanel_pe_auto_include_acf` filter (return false).
+ *
+ * @param int    $product_id The product id, or 0 for new products.
+ * @param string $post_type  The post type whose ACF groups should resolve. Default 'product'.
+ * @return string[] Array of metabox IDs (e.g. ['acf-group_my_specs']) or empty array.
+ */
+function brikpanel_resolve_auto_acf_metabox_ids( $product_id = 0, $post_type = 'product' ) {
+    if ( ! function_exists( 'acf_get_field_groups' ) ) {
+        return array();
+    }
+    if ( 'yes' !== get_option( 'brikpanel_pe_acf_auto', 'yes' ) ) {
+        return array();
+    }
+    if ( ! apply_filters( 'brikpanel_pe_auto_include_acf', true, (int) $product_id, $post_type ) ) {
+        return array();
+    }
+
+    try {
+        $args = array( 'post_type' => $post_type );
+        if ( $product_id ) {
+            $args['post_id'] = (int) $product_id;
+        }
+        $groups = acf_get_field_groups( $args );
+    } catch ( \Throwable $e ) {
+        return array();
+    }
+
+    if ( empty( $groups ) || ! is_array( $groups ) ) {
+        return array();
+    }
+
+    $ids = array();
+    foreach ( $groups as $group ) {
+        if ( empty( $group['key'] ) ) {
+            continue;
+        }
+        $ids[] = 'acf-' . $group['key'];
+    }
+    return $ids;
+}
+
+/**
+ * Enqueue ACF's input + uploader assets on a page that is not the native
+ * post edit screen. ACF's `admin_enqueue_scripts` callback runs at
+ * priority 20; BrikPanel's product-editor enqueue runs at priority 99,
+ * so by the time we call `acf_enqueue_scripts()` the native enqueue hook
+ * has already fired. We therefore also force the assets class to run
+ * enqueue_scripts() synchronously.
+ *
+ * @return void
+ */
+function brikpanel_bootstrap_acf_assets() {
+    if ( ! function_exists( 'acf_enqueue_scripts' ) ) {
+        return;
+    }
+    acf_enqueue_scripts( array( 'uploader' => true ) );
+    if ( function_exists( 'acf_get_instance' ) ) {
+        $assets = acf_get_instance( 'ACF_Assets' );
+        if ( $assets && method_exists( $assets, 'enqueue_scripts' ) ) {
+            try {
+                $assets->enqueue_scripts();
+            } catch ( \Throwable $e ) {
+                // Skip — asset loading failure should not break the editor page.
+            }
+        }
+    }
+}
+
+/**
+ * Collect downloadable-file access data for every line item in an order, keyed
+ * by order_item_id so the front-end can render per-line download counts inline
+ * without re-hitting the server.
+ *
+ * Returns an associative array of the shape:
+ *   [
+ *     (int) order_item_id => [
+ *       [
+ *         'name'      => (string) file display name,
+ *         'count'     => (int)    download_count,
+ *         'remaining' => (int|null) remaining downloads (null = unlimited),
+ *         'expires'   => (string|null) localized expiry date (null = never),
+ *         'expires_iso' => (string|null) YYYY-MM-DD for client-side sorting,
+ *       ],
+ *       ...
+ *     ],
+ *   ]
+ *
+ * Matches permissions to line items by the product_id column, which WooCommerce
+ * sets to the variation_id for variable products — so this handles both simple
+ * and variable downloadables. If two line items reference the same product_id
+ * (rare — WooCommerce normally merges them), the same permission list is
+ * surfaced against each item, matching the WooCommerce default behavior.
+ *
+ * @param WC_Order $order
+ * @return array<int, array<int, array<string, mixed>>>
+ */
+function brikpanel_collect_order_item_downloads( $order ) {
+    if ( ! $order instanceof WC_Order ) {
+        return [];
+    }
+
+    try {
+        $store   = WC_Data_Store::load( 'customer-download' );
+        $records = $store->get_downloads( [ 'order_id' => $order->get_id() ] );
+    } catch ( \Throwable $e ) {
+        return [];
+    }
+    if ( empty( $records ) ) {
+        return [];
+    }
+
+    // Group permission records by product_id so multiple files for the same
+    // variation land together against the same line item.
+    $by_product = [];
+    $product_cache = [];
+    $date_format   = brikpanel_date_format();
+
+    foreach ( $records as $record ) {
+        if ( ! $record instanceof WC_Customer_Download ) {
+            continue;
+        }
+        $pid = (int) $record->get_product_id();
+        if ( ! $pid ) {
+            continue;
+        }
+
+        if ( ! array_key_exists( $pid, $product_cache ) ) {
+            $product_cache[ $pid ] = wc_get_product( $pid );
+        }
+        $product = $product_cache[ $pid ];
+
+        $file_name = '';
+        if ( $product ) {
+            $file = $product->get_file( $record->get_download_id() );
+            if ( $file ) {
+                $file_name = $file->get_name();
+            }
+        }
+
+        $remaining_raw = $record->get_downloads_remaining();
+        $remaining     = ( $remaining_raw === '' || $remaining_raw === null ) ? null : (int) $remaining_raw;
+
+        $expires_obj = $record->get_access_expires();
+        $expires     = $expires_obj ? $expires_obj->date_i18n( $date_format ) : null;
+        $expires_iso = $expires_obj ? $expires_obj->date( 'Y-m-d' ) : null;
+
+        $by_product[ $pid ][] = [
+            'name'        => $file_name,
+            'count'       => (int) $record->get_download_count(),
+            'remaining'   => $remaining,
+            'expires'     => $expires,
+            'expires_iso' => $expires_iso,
+        ];
+    }
+
+    if ( empty( $by_product ) ) {
+        return [];
+    }
+
+    $out = [];
+    foreach ( $order->get_items() as $item_id => $item ) {
+        if ( ! $item instanceof WC_Order_Item_Product ) {
+            continue;
+        }
+        $target_pid = (int) ( $item->get_variation_id() ?: $item->get_product_id() );
+        if ( $target_pid && ! empty( $by_product[ $target_pid ] ) ) {
+            $out[ (int) $item_id ] = $by_product[ $target_pid ];
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * AJAX: fresh per-item download data for the order screen, requested after
+ * WooCommerce grants or revokes a download permission without a reload, so
+ * the Items tab shows the change straight away.
+ */
+function brikpanel_ajax_order_item_downloads() {
+    check_ajax_referer( 'brikpanel_order_item_downloads', 'nonce' );
+
+    if ( ! current_user_can( 'edit_shop_orders' ) ) {
+        wp_send_json_error( null, 403 );
+    }
+
+    $order_id = isset( $_POST['order_id'] ) ? absint( wp_unslash( $_POST['order_id'] ) ) : 0;
+    $order    = $order_id && function_exists( 'wc_get_order' ) ? wc_get_order( $order_id ) : null;
+    if ( ! $order instanceof WC_Order ) {
+        wp_send_json_error( null, 404 );
+    }
+
+    wp_send_json_success( (object) brikpanel_collect_order_item_downloads( $order ) );
+}
+add_action( 'wp_ajax_brikpanel_order_item_downloads', 'brikpanel_ajax_order_item_downloads' );
+
+/**
+ * Return the product-type choices that should appear in the BrikPanel
+ * editor's type choice. Starts from `wc_get_product_types()` (so any plugin
+ * registering a type is included automatically). Grouped and external
+ * products have their own cards since 3.3.43.
+ *
+ * @return array<string, string> type_slug => label
+ */
+function brikpanel_editor_product_types() {
+    if ( ! function_exists( 'wc_get_product_types' ) ) {
+        return [
+            'simple'   => __( 'Simple product', 'brikpanel' ),
+            'variable' => __( 'Variable product', 'brikpanel' ),
+        ];
+    }
+
+    $types = (array) wc_get_product_types();
+
+    if ( empty( $types['simple'] ) ) {
+        $types = array_merge( [ 'simple' => __( 'Simple product', 'brikpanel' ) ], $types );
+    }
+    if ( empty( $types['variable'] ) ) {
+        $types['variable'] = __( 'Variable product', 'brikpanel' );
+    }
+
+    return $types;
+}
+
+/**
+ * Whether the given product-type slug should be treated as a variation-
+ * capable parent (UI shows the variations card, save path persists
+ * variations, etc.). Covers core `variable` plus any `variable-*` type
+ * registered by subscription/booking/bundle plugins.
+ *
+ * @param string $type
+ * @return bool
+ */
+function brikpanel_is_variable_product_type( $type ) {
+    $type = (string) $type;
+    if ( $type === '' ) {
+        return false;
+    }
+    if ( $type === 'variable' ) {
+        return true;
+    }
+    return strpos( $type, 'variable-' ) === 0 || strpos( $type, 'variable_' ) === 0;
+}
+
+/**
+ * Whether the current user may publish products. WooCommerce maps the
+ * product post type's `publish_posts` to `publish_products`. A role can edit
+ * products without it, and WordPress then only lets that person send a
+ * product in for review ("Pending review").
+ *
+ * @return bool
+ */
+function brikpanel_user_can_publish_products() {
+    $type = get_post_type_object( 'product' );
+    $cap  = ( $type && ! empty( $type->cap->publish_posts ) ) ? $type->cap->publish_posts : 'publish_products';
+    return current_user_can( $cap );
+}
+
+/**
+ * The status a product save from the current user may write, by WordPress
+ * core's own rule for people who cannot publish (_wp_translate_postdata() in
+ * wp-admin/includes/post.php). A request to publish or schedule becomes
+ * "pending", unless the product is already live and the user may edit it.
+ * A request for "private" keeps the product's current status ("pending" for
+ * a new one). "password" is BrikPanel's virtual status for a published,
+ * password-protected product, so it counts as publishing.
+ *
+ * BrikPanel saves through WooCommerce's product objects and wp_update_post(),
+ * which check no capability, so every path that can change a product's
+ * status asks this first. People who may publish get their request back.
+ *
+ * @param string $requested  Requested status: draft, pending, publish, future, private or password.
+ * @param int    $product_id The product being saved, 0 for a new one.
+ * @return string
+ */
+function brikpanel_product_status_for_user( $requested, $product_id = 0 ) {
+    $requested = (string) $requested;
+    if ( brikpanel_user_can_publish_products() ) {
+        return $requested;
+    }
+
+    $product_id = (int) $product_id;
+    $previous   = $product_id > 0 ? (string) get_post_status( $product_id ) : '';
+
+    if ( 'private' === $requested ) {
+        // An auto-draft or a trashed product counts as new.
+        return in_array( $previous, [ 'publish', 'future', 'draft', 'pending', 'private' ], true ) ? $previous : 'pending';
+    }
+    if ( in_array( $requested, [ 'publish', 'future', 'password' ], true ) ) {
+        $live = in_array( $previous, [ 'publish', 'future' ], true );
+        return ( $live && current_user_can( 'edit_post', $product_id ) ) ? $requested : 'pending';
+    }
+    return $requested;
+}
+
+/**
+ * A product status as BrikPanel's screens name it. A status another plugin
+ * registered keeps that plugin's own label.
+ *
+ * @param string $status Post status.
+ * @return string
+ */
+function brikpanel_product_status_label( $status ) {
+    $status = (string) $status;
+    switch ( $status ) {
+        case 'publish':
+            return __( 'Published', 'brikpanel' );
+        case 'future':
+            return __( 'Scheduled', 'brikpanel' );
+        case 'draft':
+            return __( 'Draft', 'brikpanel' );
+        case 'pending':
+            /* translators: product status: sent in for review, waiting for a store manager to publish it. */
+            return _x( 'Pending review', 'product status', 'brikpanel' );
+        case 'private':
+            return __( 'Private', 'brikpanel' );
+        case 'trash':
+            return __( 'Trash', 'brikpanel' );
+    }
+    $object = 'auto-draft' === $status ? null : get_post_status_object( $status );
+    return ( $object && ! empty( $object->label ) ) ? (string) $object->label : __( 'Draft', 'brikpanel' );
+}
+
+/**
+ * Option keys for the customer-analytics exclusion list. A store owner who
+ * also rings up in-person sales through one or two staff/POS accounts can
+ * exclude those accounts so their hundreds of orders don't distort
+ * per-customer analytics (LTV averages, RFM segments, cohort retention,
+ * the Segments "Customers" tab). Shop-wide revenue and order-count totals
+ * are NOT affected — those still read every order.
+ */
+const BRIKPANEL_EXCLUDED_USERS_OPTION = 'brikpanel_excluded_user_ids';
+const BRIKPANEL_EXCLUDED_ROLES_OPTION = 'brikpanel_excluded_roles';
+
+/**
+ * Tell Import / Export about the analytics exclusions.
+ *
+ * The two halves of one screen part company here, and deliberately. Roles are
+ * a rule ("never count staff orders") and mean the same thing on every store,
+ * so they travel. The user list is a set of local user IDs: ID 14 is a
+ * warehouse account on one site and a customer on the next, so copying it
+ * across would quietly delete a real customer from somebody else's analytics.
+ *
+ * @param array $map Registry so far.
+ * @return array
+ */
+add_filter( 'brikpanel_exportable_option_keys', 'brikpanel_analytics_register_export_keys' );
+function brikpanel_analytics_register_export_keys( $map ) {
+	$map[ BRIKPANEL_EXCLUDED_ROLES_OPTION ] = [
+		'class'    => 'portable',
+		'group'    => 'analytics',
+		'type'     => 'multiselect',
+		'default'  => [],
+	];
+	$map[ BRIKPANEL_EXCLUDED_USERS_OPTION ] = [
+		'class' => 'site',
+		'group' => 'analytics',
+	];
+	return $map;
+}
+
+/**
+ * Translated display label for a role slug (e.g. 'shop_manager' →
+ * "Shop manager"). Falls back to a humanised slug if the role is unknown.
+ *
+ * @param string $slug
+ * @return string
+ */
+function brikpanel_role_display_name( $slug ) {
+    $slug  = (string) $slug;
+    $roles = wp_roles()->roles;
+    if ( isset( $roles[ $slug ]['name'] ) ) {
+        return translate_user_role( $roles[ $slug ]['name'] );
+    }
+    return ucwords( str_replace( [ '_', '-' ], ' ', $slug ) );
+}
+
+/**
+ * Role slugs explicitly chosen for exclusion from customer-level analytics.
+ *
+ * @return string[]
+ */
+function brikpanel_excluded_roles() {
+    $roles = get_option( BRIKPANEL_EXCLUDED_ROLES_OPTION, [] );
+    if ( ! is_array( $roles ) ) {
+        return [];
+    }
+    return array_values( array_unique( array_filter( array_map( 'sanitize_key', $roles ) ) ) );
+}
+
+/**
+ * User IDs explicitly chosen for exclusion (independent of any role).
+ *
+ * @return int[]
+ */
+function brikpanel_excluded_user_ids_raw() {
+    $ids = get_option( BRIKPANEL_EXCLUDED_USERS_OPTION, [] );
+    if ( ! is_array( $ids ) ) {
+        return [];
+    }
+    return array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
+}
+
+/**
+ * Resolved set of user IDs to exclude from customer-level analytics:
+ * the explicitly chosen IDs plus every user holding an excluded role.
+ *
+ * Memoised per request. Role resolution is the only potentially expensive
+ * part, so it's skipped entirely when no roles are selected.
+ *
+ * @return int[] Sorted, unique, positive user IDs.
+ */
+function brikpanel_excluded_customer_ids() {
+    static $resolved = null;
+    if ( $resolved !== null ) {
+        return $resolved;
+    }
+
+    $ids   = brikpanel_excluded_user_ids_raw();
+    $roles = brikpanel_excluded_roles();
+
+    if ( ! empty( $roles ) ) {
+        $role_user_ids = get_users( [
+            'role__in' => $roles,
+            'fields'   => 'ID',
+            'number'   => -1,
+        ] );
+        $ids = array_merge( $ids, array_map( 'absint', (array) $role_user_ids ) );
+    }
+
+    $ids = array_values( array_unique( array_filter( $ids ) ) );
+    sort( $ids, SORT_NUMERIC );
+
+    /**
+     * Filter the final list of user IDs excluded from customer-level analytics.
+     *
+     * @param int[] $ids Resolved excluded user IDs.
+     */
+    $resolved = array_map( 'absint', (array) apply_filters( 'brikpanel_excluded_customer_ids', $ids ) );
+    return $resolved;
+}
+
+/**
+ * Build a SQL fragment that removes excluded customers from an order-level
+ * query. Returns '' when nothing is excluded, so call sites can append it
+ * unconditionally.
+ *
+ * The list is a vetted set of integers (absint'd), so direct interpolation
+ * is safe and avoids dragging an ever-growing placeholder list through
+ * every $wpdb->prepare() call site.
+ *
+ * @param string $customer_id_expr SQL expression evaluating to the order's
+ *                                  customer user ID (0 for guests), e.g.
+ *                                  'o.customer_id' on HPOS.
+ * @return string Leading-space ' AND (<expr>) NOT IN (1,2,3)' or ''.
+ */
+function brikpanel_excluded_customer_sql( $customer_id_expr ) {
+    $ids = brikpanel_excluded_customer_ids();
+    if ( empty( $ids ) ) {
+        return '';
+    }
+    $list = implode( ',', array_map( 'absint', $ids ) );
+    return " AND ( {$customer_id_expr} ) NOT IN ({$list})";
+}
+
+// =============================================================================
+// PHONE NUMBERS — one normaliser for every WhatsApp link in the plugin
+// =============================================================================
+//
+// Both the Abandoned Carts screen and the Orders screen turn a customer's phone
+// into a wa.me link, and until 3.2.63 each did it with its own copy of the
+// logic, its own country-code source and its own length rules. They disagreed
+// often enough to matter: the same number could open two different chats.
+//
+// This lives in helpers.php because it is needed on the front end too (the
+// Orders module is only loaded inside wp-admin), and helpers.php is required at
+// file scope, outside that gate.
+
+/**
+ * ISO 3166-1 alpha-2 country code → international dialing code (digits only,
+ * no leading "+"). Used to complete a local phone number into the E.164-style
+ * form WhatsApp needs. Filterable so a store can correct or extend it.
+ *
+ * @param string $cc Two-letter uppercase country code.
+ * @return string Dialing code digits, or '' when unknown.
+ */
+function brikpanel_country_dialing_code( $cc ) {
+	$cc  = strtoupper( (string) $cc );
+	$map = array(
+		'AF' => '93', 'AL' => '355', 'DZ' => '213', 'AS' => '1', 'AD' => '376', 'AO' => '244', 'AI' => '1', 'AG' => '1',
+		'AR' => '54', 'AM' => '374', 'AW' => '297', 'AU' => '61', 'AT' => '43', 'AZ' => '994', 'BS' => '1', 'BH' => '973',
+		'BD' => '880', 'BB' => '1', 'BY' => '375', 'BE' => '32', 'BZ' => '501', 'BJ' => '229', 'BM' => '1', 'BT' => '975',
+		'BO' => '591', 'BA' => '387', 'BW' => '267', 'BR' => '55', 'BN' => '673', 'BG' => '359', 'BF' => '226', 'BI' => '257',
+		'KH' => '855', 'CM' => '237', 'CA' => '1', 'CV' => '238', 'KY' => '1', 'CF' => '236', 'TD' => '235', 'CL' => '56',
+		'CN' => '86', 'CO' => '57', 'KM' => '269', 'CG' => '242', 'CD' => '243', 'CR' => '506', 'CI' => '225', 'HR' => '385',
+		'CU' => '53', 'CY' => '357', 'CZ' => '420', 'DK' => '45', 'DJ' => '253', 'DM' => '1', 'DO' => '1', 'EC' => '593',
+		'EG' => '20', 'SV' => '503', 'GQ' => '240', 'ER' => '291', 'EE' => '372', 'SZ' => '268', 'ET' => '251', 'FJ' => '679',
+		'FI' => '358', 'FR' => '33', 'GF' => '594', 'PF' => '689', 'GA' => '241', 'GM' => '220', 'GE' => '995', 'DE' => '49',
+		'GH' => '233', 'GI' => '350', 'GR' => '30', 'GL' => '299', 'GD' => '1', 'GP' => '590', 'GU' => '1', 'GT' => '502',
+		'GG' => '44', 'GN' => '224', 'GW' => '245', 'GY' => '592', 'HT' => '509', 'HN' => '504', 'HK' => '852', 'HU' => '36',
+		'IS' => '354', 'IN' => '91', 'ID' => '62', 'IR' => '98', 'IQ' => '964', 'IE' => '353', 'IM' => '44', 'IL' => '972',
+		'IT' => '39', 'JM' => '1', 'JP' => '81', 'JE' => '44', 'JO' => '962', 'KZ' => '7', 'KE' => '254', 'KI' => '686',
+		'KW' => '965', 'KG' => '996', 'LA' => '856', 'LV' => '371', 'LB' => '961', 'LS' => '266', 'LR' => '231', 'LY' => '218',
+		'LI' => '423', 'LT' => '370', 'LU' => '352', 'MO' => '853', 'MG' => '261', 'MW' => '265', 'MY' => '60', 'MV' => '960',
+		'ML' => '223', 'MT' => '356', 'MH' => '692', 'MQ' => '596', 'MR' => '222', 'MU' => '230', 'MX' => '52', 'FM' => '691',
+		'MD' => '373', 'MC' => '377', 'MN' => '976', 'ME' => '382', 'MS' => '1', 'MA' => '212', 'MZ' => '258', 'MM' => '95',
+		'NA' => '264', 'NR' => '674', 'NP' => '977', 'NL' => '31', 'NC' => '687', 'NZ' => '64', 'NI' => '505', 'NE' => '227',
+		'NG' => '234', 'MK' => '389', 'NO' => '47', 'OM' => '968', 'PK' => '92', 'PW' => '680', 'PS' => '970', 'PA' => '507',
+		'PG' => '675', 'PY' => '595', 'PE' => '51', 'PH' => '63', 'PL' => '48', 'PT' => '351', 'PR' => '1', 'QA' => '974',
+		'RE' => '262', 'RO' => '40', 'RU' => '7', 'RW' => '250', 'KN' => '1', 'LC' => '1', 'VC' => '1', 'WS' => '685',
+		'SM' => '378', 'ST' => '239', 'SA' => '966', 'SN' => '221', 'RS' => '381', 'SC' => '248', 'SL' => '232', 'SG' => '65',
+		'SK' => '421', 'SI' => '386', 'SB' => '677', 'SO' => '252', 'ZA' => '27', 'KR' => '82', 'SS' => '211', 'ES' => '34',
+		'LK' => '94', 'SD' => '249', 'SR' => '597', 'SE' => '46', 'CH' => '41', 'SY' => '963', 'TW' => '886', 'TJ' => '992',
+		'TZ' => '255', 'TH' => '66', 'TL' => '670', 'TG' => '228', 'TO' => '676', 'TT' => '1', 'TN' => '216', 'TR' => '90',
+		'TM' => '993', 'TC' => '1', 'TV' => '688', 'UG' => '256', 'UA' => '380', 'AE' => '971', 'GB' => '44', 'US' => '1',
+		'UY' => '598', 'UZ' => '998', 'VU' => '678', 'VA' => '39', 'VE' => '58', 'VN' => '84', 'VG' => '1', 'VI' => '1',
+		'YE' => '967', 'ZM' => '260', 'ZW' => '263',
+	);
+	$code = isset( $map[ $cc ] ) ? $map[ $cc ] : '';
+
+	/**
+	 * Filter the dialing code resolved for a country. Return '' to skip
+	 * prepending (the raw digits are then used as-is).
+	 */
+	return (string) apply_filters( 'brikpanel_country_dialing_code', $code, $cc );
+}
+
+/**
+ * Every dialing code the map knows, longest first, for prefix detection.
+ *
+ * Codes are one to three digits, so a plain "does the number start with a code"
+ * test has to try the longest match first or "1" would shadow "12" and "123".
+ *
+ * @return array<int,string> Unique codes, sorted longest-first.
+ */
+function brikpanel_known_dialing_codes() {
+	static $codes = null;
+	if ( null !== $codes ) {
+		return $codes;
+	}
+
+	// Reuse the map itself rather than keeping a second list in sync: ask the
+	// resolver for every ISO country WooCommerce knows about.
+	$countries = array();
+	if ( function_exists( 'WC' ) && WC()->countries && method_exists( WC()->countries, 'get_countries' ) ) {
+		$countries = array_keys( (array) WC()->countries->get_countries() );
+	}
+	if ( ! $countries ) {
+		// WooCommerce not ready (cron, early boot). Fall back to the ISO list the
+		// map itself is keyed by, obtained by asking for a code we know exists.
+		$countries = array( 'US', 'GB', 'DE', 'FR', 'TR', 'IN', 'BR', 'RU', 'CN', 'JP' );
+	}
+
+	$out = array();
+	foreach ( $countries as $cc ) {
+		$code = brikpanel_country_dialing_code( $cc );
+		if ( '' !== $code ) {
+			$out[ $code ] = true;
+		}
+	}
+	$out = array_keys( $out );
+	usort( $out, static function ( $a, $b ) {
+		return strlen( $b ) <=> strlen( $a );
+	} );
+
+	$codes = $out;
+	return $codes;
+}
+
+/**
+ * The dialing code a number already starts with, or '' when it starts with none.
+ *
+ * @param string $digits Digits only.
+ * @return string
+ */
+function brikpanel_leading_dialing_code( $digits ) {
+	foreach ( brikpanel_known_dialing_codes() as $code ) {
+		if ( 0 === strpos( $digits, $code ) ) {
+			return $code;
+		}
+	}
+	return '';
+}
+
+/**
+ * Whether a digit string is a plausible international number.
+ *
+ * The shortest real E.164 numbers are 8 digits including the country code and
+ * the standard caps the whole thing at 15. Outside that it is a typo, an
+ * extension or a note, and a wrong wa.me link is worse than none.
+ *
+ * @param string $digits
+ * @return bool
+ */
+function brikpanel_is_dialable_e164( $digits ) {
+	$len = strlen( (string) $digits );
+	return $len >= 8 && $len <= 15;
+}
+
+/**
+ * Turn a customer-typed phone number into the international digits WhatsApp
+ * expects (no "+"), or '' when it cannot be dialled.
+ *
+ * The hard part is not formatting, it is deciding whether a number that does
+ * not start with "+" is a local number needing a country code in front, or an
+ * international number the shopper typed without the plus. Guessing wrong
+ * produces a link to a stranger, so the decision is made from the strongest
+ * evidence available:
+ *
+ *   A. The number already starts with the country's own code. Then it is
+ *      already international; prepending again gives "9090532…".
+ *   B. The country is only a GUESS (nothing was captured for this shopper, so
+ *      we fell back to the store's own country) and the number starts with some
+ *      other country's code. Here the number's own prefix is better evidence
+ *      than the store's address: a Turkish number in a US-based store is a
+ *      customer, not a typo. Deliberately limited to the guessed case — when
+ *      the country is known, a leading digit means very little (a German mobile
+ *      starts with "1", which is also the NANP code).
+ *   C. Prepending would push the number past E.164's 15-digit ceiling, which
+ *      is proof on its own that the code is already there.
+ *
+ * @param string $raw     Number as the customer typed it.
+ * @param string $country Two-letter country the number belongs to, '' when unknown.
+ * @return string Digits only (no "+"), or ''.
+ */
+function brikpanel_phone_to_e164( $raw, $country = '' ) {
+	$raw = trim( (string) $raw );
+	if ( '' === $raw ) {
+		return '';
+	}
+
+	$digits = preg_replace( '/\\D+/', '', $raw );
+	if ( '' === $digits ) {
+		return '';
+	}
+
+	// --- Explicitly international: the shopper already told us -------------
+	// "+" is unambiguous. "00" and the North American "011" are the two dial-out
+	// prefixes in use; both mean "what follows is a full international number".
+	$number = '';
+	if ( 0 === strpos( $raw, '+' ) ) {
+		$number = $digits;
+	} elseif ( 0 === strpos( $digits, '011' ) && strlen( $digits ) > 11 ) {
+		// Length guard: "011…" is only a dial-out prefix when what follows is
+		// long enough to be a whole international number. Otherwise it is a
+		// local number that happens to start 011 (a UK 0113… landline).
+		$number = substr( $digits, 3 );
+	} elseif ( 0 === strpos( $digits, '00' ) ) {
+		$number = substr( $digits, 2 );
+	}
+
+	if ( '' !== $number ) {
+		$number = ltrim( $number, '0' );
+		return brikpanel_is_dialable_e164( $number )
+			? (string) apply_filters( 'brikpanel_phone_to_e164', $number, $raw, $country )
+			: '';
+	}
+
+	// --- Local form: decide whether a country code has to go in front ------
+	$country = strtoupper( trim( (string) $country ) );
+	$guessed = ( '' === $country );
+	if ( $guessed ) {
+		$base    = function_exists( 'wc_get_base_location' ) ? wc_get_base_location() : array();
+		$country = strtoupper( (string) ( $base['country'] ?? '' ) );
+	}
+
+	// A single national trunk zero is written locally and never dialled from
+	// abroad (UK "07…" -> 44 7…). Only one: a number written "00…" already took
+	// the international branch above, so a second zero here is part of the number.
+	$local = ( strlen( $digits ) > 1 && '0' === $digits[0] ) ? substr( $digits, 1 ) : $digits;
+
+	$code = brikpanel_country_dialing_code( $country );
+	if ( '' === $code ) {
+		// No country at all — not the customer's, not even the store's. A
+		// nationally-written number cannot be completed, and using it as typed
+		// would dial whoever owns those digits under some other country's code
+		// ("532 111 22 33" reads as +53 2111 22 33, Cuba). Almost any digit
+		// string begins with some assigned code, so there is nothing to check
+		// against; no link is the only safe answer.
+		return '';
+	}
+
+	if ( 0 === strpos( $local, $code ) && brikpanel_is_dialable_e164( $local ) ) {
+		$number = $local;                                   // rule A
+	} elseif ( $guessed && brikpanel_is_dialable_e164( $local ) && '' !== brikpanel_leading_dialing_code( $local ) ) {
+		$number = $local;                                   // rule B
+	} elseif ( ! brikpanel_is_dialable_e164( $code . $local ) && brikpanel_is_dialable_e164( $local ) ) {
+		$number = $local;                                   // rule C
+	} else {
+		$number = $code . $local;
+	}
+
+	if ( ! brikpanel_is_dialable_e164( $number ) ) {
+		return '';
+	}
+
+	/**
+	 * Filter the final international number (digits only, no "+").
+	 *
+	 * @param string $number  Resolved E.164 digits.
+	 * @param string $raw     Number as the customer typed it.
+	 * @param string $country Two-letter country used to resolve it.
+	 */
+	return (string) apply_filters( 'brikpanel_phone_to_e164', $number, $raw, $country );
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Plain text and bidirectional isolation
+ * ---------------------------------------------------------------------------
+ *
+ * Prices, dates and phone numbers are written left to right even inside a
+ * right-to-left sentence, and the Unicode Bidirectional Algorithm works that
+ * out from the characters alone - until a separator gets in the way. In
+ * "15.402,50 EGP" the comma is a neutral character, and a renderer that does
+ * not resolve it as part of the number treats the amount as two separate runs,
+ * which an Arabic paragraph then lays out in the opposite order: the merchant
+ * sends 15.402,50 and the shopper reads "50,15.402".
+ *
+ * WooCommerce knows this, which is why wc_price() wraps its output in <bdi>.
+ * Every "price as plain text" path throws that wrapper away with
+ * wp_strip_all_tags(), so the isolation has to be put back by hand, as the
+ * characters U+2066 (LRI) and U+2069 (PDI) - the plain-text equivalent of the
+ * <bdi> element, invisible in a left-to-right context and understood by
+ * WhatsApp, e-mail clients and browsers alike.
+ */
+
+/**
+ * Reduce an HTML fragment to the plain text a message or a table cell shows.
+ *
+ * Order matters: wc_price() emits `&#36;`/`&nbsp;` and wc_display_item_meta()
+ * emits `&times;`, so entities are decoded *before* the tags come off.
+ * Stripping first would leave the entity text sitting in the output verbatim.
+ *
+ * The whitespace collapse deliberately spares the no-break spaces. The `u`
+ * modifier turns on PCRE's Unicode properties, where `\S` counts U+00A0 as
+ * whitespace, so the obvious pattern quietly rewrites the no-break space
+ * wc_price() puts between the symbol and the amount into an ordinary one -
+ * and then WhatsApp is free to break the line straight through the price.
+ *
+ * @param string $html
+ * @return string
+ */
+function brikpanel_plain_text_from_html( $html ) {
+	$text = html_entity_decode( (string) $html, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+	$text = wp_strip_all_tags( $text );
+	$text = preg_replace( '/[^\S\n\x{00A0}\x{202F}]+/u', ' ', $text );
+
+	return trim( (string) $text );
+}
+
+/**
+ * Strip any bidirectional control character a string arrived with.
+ *
+ * Runs before this file adds its own isolation, for two reasons. A stray
+ * U+2069 in merchant- or filter-supplied text would close our isolate early
+ * and hand the rest of the amount back to the surrounding paragraph, and
+ * U+202E (right-to-left override) reverses everything after it - the trick
+ * used to disguise filenames, and here enough to make a total read as a
+ * different number. Stripping first also guarantees isolates never nest, which
+ * is what lets brikpanel_bidi_close_isolates() count them exactly.
+ *
+ * @param string $text
+ * @return string
+ */
+function brikpanel_bidi_strip_controls( $text ) {
+	static $controls = null;
+
+	if ( null === $controls ) {
+		$controls = array(
+			"\u{200E}" => '', // LRM
+			"\u{200F}" => '', // RLM
+			"\u{202A}" => '', // LRE
+			"\u{202B}" => '', // RLE
+			"\u{202C}" => '', // PDF
+			"\u{202D}" => '', // LRO
+			"\u{202E}" => '', // RLO
+			"\u{2066}" => '', // LRI
+			"\u{2067}" => '', // RLI
+			"\u{2068}" => '', // FSI
+			"\u{2069}" => '', // PDI
+		);
+	}
+
+	return strtr( (string) $text, $controls );
+}
+
+/**
+ * Wrap a whole string in a left-to-right isolate.
+ *
+ * For values that are left-to-right from end to end: a phone number, a
+ * formatted date, an order number. Anything mixing a number with a currency
+ * symbol wants brikpanel_bidi_isolate_numbers() instead, which leaves the
+ * symbol where the merchant configured it.
+ *
+ * An empty string is returned untouched. Both message builders decide whether
+ * to drop a whole line by comparing a token against '', and two invisible
+ * characters would quietly turn every optional line into a permanent one.
+ *
+ * @param string $text
+ * @return string
+ */
+function brikpanel_bidi_isolate_ltr( $text ) {
+	$text = (string) $text;
+
+	if ( '' === trim( $text ) || ( defined( 'BRIKPANEL_NO_BIDI_ISOLATION' ) && BRIKPANEL_NO_BIDI_ISOLATION ) ) {
+		return $text;
+	}
+
+	return "\u{2066}" . brikpanel_bidi_strip_controls( $text ) . "\u{2069}";
+}
+
+/**
+ * Wrap every number inside a string in its own left-to-right isolate.
+ *
+ * Isolating the number rather than the whole price is what keeps the currency
+ * where the merchant put it. Wrapping "ر.س 15.402,50" as one unit fixes the
+ * digits but moves the symbol to the other side of the amount, because the
+ * isolate forces one direction on both; isolating only "15.402,50" leaves the
+ * symbol to the paragraph, which places it exactly as woocommerce_currency_pos
+ * asked. Verified against every position with a Latin code, a "$" and an
+ * Arabic symbol.
+ *
+ * A number is a run of digits plus the separators that appear *between*
+ * digits - the decimal mark, the thousands mark and their Arabic-Indic
+ * equivalents, including the no-break and thin spaces used as group
+ * separators in several locales. A separator with no digit after it is left
+ * outside, so "15.402,50 EGP" isolates the amount and not the trailing code.
+ *
+ * A leading sign joins the number, so a refund reads "-15,00" and not
+ * "15,00-". Only a sign that starts the run counts: the lookbehind keeps the
+ * hyphens of "2026-08-17" from being read as minus signs.
+ *
+ * @param string $text
+ * @return string
+ */
+function brikpanel_bidi_isolate_numbers( $text ) {
+	$text = (string) $text;
+
+	if ( '' === trim( $text ) || ( defined( 'BRIKPANEL_NO_BIDI_ISOLATION' ) && BRIKPANEL_NO_BIDI_ISOLATION ) ) {
+		return $text;
+	}
+
+	$text = brikpanel_bidi_strip_controls( $text );
+
+	$separator = '[.,\'\x{2019}\x{066B}\x{066C}\x{00A0}\x{202F}\x{2009} ]';
+	$number    = '/(?<!\p{Nd})[+\-\x{2212}]?\p{Nd}+(?:' . $separator . '\p{Nd}+)*/u';
+
+	$isolated = preg_replace( $number, "\u{2066}$0\u{2069}", $text );
+
+	return null === $isolated ? $text : $isolated;
+}
+
+/**
+ * A monetary amount as isolated plain text, ready to drop into a message.
+ *
+ * @param float|int|string $amount Amount to format.
+ * @param array            $args   Passed straight to wc_price(), e.g. currency.
+ * @return string
+ */
+function brikpanel_money_text( $amount, $args = array() ) {
+	if ( ! function_exists( 'wc_price' ) ) {
+		return brikpanel_bidi_isolate_numbers( brikpanel_number( (float) $amount, 2 ) );
+	}
+
+	return brikpanel_bidi_isolate_numbers(
+		brikpanel_plain_text_from_html( wc_price( (float) $amount, (array) $args ) )
+	);
+}
+
+/**
+ * The same isolation for a price WooCommerce has already formatted.
+ *
+ * Used where the markup itself carries meaning that reformatting would lose -
+ * a refunded order's struck-through original beside the new total, say. The
+ * markup is kept, so the per-number pass is skipped: an isolate landing inside
+ * `&#36;` or between a tag's angle brackets would corrupt the fragment. The
+ * outer isolate alone is enough there, because an e-mail client renders the
+ * `<del>`/`<ins>` structure with its own directionality anyway.
+ *
+ * @param string $html Price HTML, e.g. from get_formatted_order_total().
+ * @return string
+ */
+function brikpanel_money_text_from_html( $html ) {
+	$html = (string) $html;
+
+	if ( false !== strpbrk( $html, '<&' ) ) {
+		return brikpanel_bidi_isolate_ltr( $html );
+	}
+
+	return brikpanel_bidi_isolate_numbers( $html );
+}
+
+/**
+ * Close any isolate a truncation left open.
+ *
+ * A message cut to a maximum length can land between an LRI and its PDI, and
+ * an unclosed isolate swallows everything after it into the wrong direction.
+ * Only the opening direction can go missing, since every cut takes the tail,
+ * but the closing ones are counted too in case a filter injected its own.
+ *
+ * @param string $text
+ * @return string
+ */
+function brikpanel_bidi_close_isolates( $text ) {
+	$text = (string) $text;
+
+	$unclosed = substr_count( $text, "\u{2066}" )
+		+ substr_count( $text, "\u{2067}" )
+		+ substr_count( $text, "\u{2068}" )
+		- substr_count( $text, "\u{2069}" );
+
+	if ( $unclosed > 0 ) {
+		$text .= str_repeat( "\u{2069}", $unclosed );
+	}
+
+	return $text;
+}
+
+
+if ( ! function_exists( 'brikpanel_index_terms_by_parent' ) ) {
+	/**
+	 * Group a flat list of terms by parent, ready for a hierarchical renderer.
+	 *
+	 * The term checklists (product categories in the editor's Category and Brand
+	 * boxes, and in the products list Quick Edit drawer) used to find each node's
+	 * children by rescanning the WHOLE term array at every level of the
+	 * recursion. With N terms and no `number` limit on the `get_terms()` that
+	 * feeds them, that is N comparisons per node over N nodes: fine for the
+	 * twenty categories a small store has, quadratic for a catalogue with
+	 * thousands, where the page hits the memory limit or the execution timeout
+	 * and the store owner gets "There has been a critical error on this website"
+	 * with nothing to explain it. Indexing once turns each walker into a single
+	 * pass over the tree.
+	 *
+	 * Parents are cast to int on the way in. `WP_Term` already stores `parent`
+	 * as an int, but a `get_terms` / `terms_clauses` filter (WPML, Polylang, some
+	 * object-cache layers) can hand back plain rows whose `parent` is the string
+	 * the database returned, and a strict comparison against int 0 then matches
+	 * nothing and silently renders an empty box.
+	 *
+	 * @param iterable $terms Terms with `term_id` and `parent` properties.
+	 * @return array<int,array> parent term id => list of child terms, source order kept.
+	 */
+	function brikpanel_index_terms_by_parent( $terms ) {
+		$by_parent = array();
+	
+		if ( ! is_array( $terms ) && ! ( $terms instanceof Traversable ) ) {
+			return $by_parent;
+		}
+	
+		foreach ( $terms as $term ) {
+			if ( ! is_object( $term ) || ! isset( $term->parent ) ) {
+				continue;
+			}
+			$by_parent[ (int) $term->parent ][] = $term;
+		}
+	
+		return $by_parent;
+	}
+}
+
+if ( ! function_exists( 'brikpanel_mark_screen_classic' ) ) {
+	/**
+	 * Tell the current (spoofed) screen it is a classic editor screen.
+	 *
+	 * BrikPanel renders a product by spoofing `set_current_screen('product')`
+	 * and then firing `add_meta_boxes`, so it collects the same metaboxes the
+	 * classic editor would. WP_Screen decides `is_block_editor()` from
+	 * `use_block_editor_for_post_type()`, and plenty of sites turn the block
+	 * editor on for products — WooCommerce says no, but a theme or plugin can
+	 * filter that back to yes (Shoptimizer ships it on by default).
+	 *
+	 * On those sites the spoofed screen reported itself as a block editor, and
+	 * every plugin that serves Gutenberg through a sidebar panel instead of a
+	 * metabox simply registered nothing. SEOPress is the clearest case: its
+	 * universal metabox opener returns early on a block-editor screen
+	 * (src/Actions/Admin/ModuleMetabox.php) and the classic `seopress_cpt`
+	 * fallback only registers when the universal module is off, so BrikPanel's
+	 * SEO card ended up empty and printed "did not register its SEO fields",
+	 * blaming a plugin setting that was not the cause.
+	 *
+	 * BrikPanel's editor is a classic surface: it renders metaboxes, it has no
+	 * block canvas. Saying so is a statement of fact, not a workaround, and it
+	 * is scoped to the spoofed screen — the real WooCommerce product editor is
+	 * untouched and keeps whatever mode the site chose for it.
+	 *
+	 * `WP_Screen::is_block_editor( $set = null )` is core's own setter
+	 * (wp-admin/includes/class-wp-screen.php). Guarded because WP_Screen only
+	 * grew it in 5.0 and the method may be absent on a very old install.
+	 *
+	 * Call directly after `set_current_screen()` and before anything that
+	 * registers metaboxes or enqueues editor assets.
+	 *
+	 * @return void
+	 */
+	function brikpanel_mark_screen_classic() {
+		if ( ! function_exists( 'get_current_screen' ) ) {
+			return;
+		}
+		$screen = get_current_screen();
+		if ( $screen && method_exists( $screen, 'is_block_editor' ) ) {
+			$screen->is_block_editor( false );
+		}
+	}
+}
+
+if ( ! function_exists( 'brikpanel_csv_safe_cell' ) ) {
+	/**
+	 * OWASP CSV / formula-injection guard for one exported cell.
+	 *
+	 * Spreadsheet apps treat a cell whose first character is `=`, `+`, `-`,
+	 * `@`, TAB or CR as a formula rather than as text. Every BrikPanel CSV
+	 * export carries wording a customer typed at checkout, so a billing name
+	 * of `=HYPERLINK("https://evil","Refund")` opens as a live phishing link
+	 * in the merchant's spreadsheet, and `=cmd|'/C calc'!A0` asks Excel to run
+	 * a command over DDE. The attacker needs no account: placing a guest order
+	 * is enough, and the payload fires on the merchant's own machine.
+	 *
+	 * Mitigation: prefix the value with a single quote, which every spreadsheet
+	 * reads as "this cell is literal text" and hides from the displayed value.
+	 * Same fix WooCommerce core uses (WC_CSV_Exporter::escape_data) and the
+	 * same one this plugin already applies to the Google Sheets push
+	 * (Brikpanel_Sheets_Client::neutralise_formula_injection).
+	 *
+	 * Plain decimal numbers pass through untouched: a number cannot form a
+	 * formula, and quoting one turns a sortable column into text. That test is
+	 * deliberately looser than core's is_int/is_float, because rows here are
+	 * already stringified — number_format() and WC_Product::get_regular_price()
+	 * both return strings, and a backordered stock level of -5 or a
+	 * refund-negative total of -12.50 has to stay a number in the sheet.
+	 *
+	 * The test is a regex and NOT is_numeric(), which would undo the one guard
+	 * this plugin already shipped: is_numeric( '+905551112233' ) is true, and
+	 * an international phone is the one real column that starts with `+`.
+	 * Excel evaluates such a cell and silently eats the `+`. is_numeric() also
+	 * accepts a leading TAB and trailing whitespace, and its whitespace rules
+	 * changed in PHP 8.0 — none of which belongs in a security guard.
+	 *
+	 * ASCII byte comparisons only, no mb_* calls: every trigger character is
+	 * ASCII, so the first byte is the first character for this purpose.
+	 *
+	 * @param mixed $value Raw cell value.
+	 * @return mixed Safe value. Non-strings and plain numbers are returned as-is.
+	 */
+	function brikpanel_csv_safe_cell( $value ) {
+		// int / float / null / bool: fputcsv stringifies these itself, and the
+		// only one that can lead with a trigger character is a negative number,
+		// which is not a formula. Returning them untouched keeps output identical.
+		if ( ! is_string( $value ) || $value === '' ) {
+			return $value;
+		}
+
+		// Plain decimal number, optionally negative. No exponent, no leading
+		// `+`, no surrounding whitespace — anything fuzzier gets the quote.
+		if ( preg_match( '/^-?[0-9]+(\.[0-9]+)?$/', $value ) ) {
+			return $value;
+		}
+
+		// Check the true first byte (catches TAB / CR) and the first
+		// non-whitespace byte (catches " =1+1", which a consumer that trims
+		// would still evaluate).
+		$trimmed = ltrim( $value );
+		if ( in_array( $value[0], [ '=', '+', '-', '@', "\t", "\r" ], true )
+			|| ( $trimmed !== '' && in_array( $trimmed[0], [ '=', '+', '-', '@' ], true ) ) ) {
+			return "'" . $value;
+		}
+
+		return $value;
+	}
+}
+
+if ( ! function_exists( 'brikpanel_csv_safe_row' ) ) {
+	/**
+	 * Run every cell of one export row through brikpanel_csv_safe_cell().
+	 *
+	 * Applied to the whole row rather than to hand-picked columns on purpose:
+	 * picking columns is how the original bug happened — the phone column was
+	 * guarded and the billing name sitting right next to it was not. Wrapping
+	 * the row means a column added later is covered by default instead of
+	 * being one more thing to remember.
+	 *
+	 * Header rows are deliberately NOT passed through this. They are
+	 * plugin-controlled translated strings, and in the products export they
+	 * are WooCommerce importer column names that have to round-trip exactly.
+	 *
+	 * @param array $row One CSV row.
+	 * @return array Same row, same keys, every cell neutralised.
+	 */
+	function brikpanel_csv_safe_row( array $row ) {
+		return array_map( 'brikpanel_csv_safe_cell', $row );
+	}
+}
+
+
+if ( ! function_exists( 'brikpanel_order_numbers_for_ids' ) ) {
+	/**
+	 * Resolve a batch of order IDs to the order numbers the shop actually shows.
+	 *
+	 * WooCommerce runs every displayed order number through the
+	 * `woocommerce_order_number` filter, which is what sequential-order-number
+	 * plugins hook to replace the raw database ID with their own series. Screens
+	 * that read orders straight out of the database with $wpdb never go through
+	 * an order object, so they would print the ID and disagree with the orders
+	 * list, which WooCommerce renders itself.
+	 *
+	 * Loading an order object per row just to ask for its number would be a
+	 * pointless cost on the stores that have no such plugin, and those are most
+	 * of them. So the filter is checked first: with nothing hooked the number IS
+	 * the ID and the map is built without touching the database at all. Only
+	 * when a plugin is actually renumbering orders are the page's orders loaded,
+	 * in one batch rather than one query per row.
+	 *
+	 * @param int[] $ids Order IDs.
+	 * @return array<int,string> Order ID => order number, one entry per valid ID.
+	 */
+	function brikpanel_order_numbers_for_ids( array $ids ) {
+		$ids = array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
+
+		$map = array();
+		foreach ( $ids as $id ) {
+			$map[ $id ] = (string) $id;
+		}
+
+		if ( ! $ids || ! has_filter( 'woocommerce_order_number' ) || ! function_exists( 'wc_get_orders' ) ) {
+			return $map;
+		}
+
+		// BrikPanel's own sequential numbers (front-end/orders/brikpanel-order-numbers.php)
+		// sit in order meta, so while its filter is the only one the numbers are
+		// one query per thousand orders instead of an order object per row.
+		if ( function_exists( 'brikpanel_order_numbers_filter_is_ours_only' ) && brikpanel_order_numbers_filter_is_ours_only() ) {
+			foreach ( array_chunk( $ids, 1000 ) as $chunk ) {
+				$map = array_replace( $map, brikpanel_order_numbers_map( $chunk ) );
+			}
+			return $map;
+		}
+
+		// 'post__in' is the ID list key both storage backends understand: the
+		// HPOS query reads it, and the legacy one hands it to WP_Query. 'include'
+		// looks like the modern spelling but HPOS ignores it and returns the
+		// whole table. Loaded 200 at a time, so an export of thousands of rows
+		// never holds every order object at once.
+		foreach ( array_chunk( $ids, 200 ) as $chunk ) {
+			$orders = wc_get_orders(
+				array(
+					'post__in' => $chunk,
+					'limit'    => -1,
+					'type'     => 'shop_order',
+					'status'   => 'any',
+				)
+			);
+
+			if ( ! is_array( $orders ) ) {
+				continue;
+			}
+
+			// WC_Order, not WC_Abstract_Order: get_order_number() lives on WC_Order
+			// alone, and a refund is an abstract order without it. 'type' should keep
+			// refunds out already, but a fatal is too high a price for trusting that.
+			foreach ( $orders as $order ) {
+				if ( $order instanceof WC_Order ) {
+					$map[ $order->get_id() ] = (string) $order->get_order_number();
+				}
+			}
+		}
+
+		return $map;
+	}
+}
+
+// =============================================================================
+// DATES & TIMEZONE — one clock for every screen
+// =============================================================================
+//
+// WordPress pins PHP's default timezone to UTC, which makes two mistakes easy
+// to write and impossible to see:
+//
+//   1. mysql2date( $fmt, $gmt ) reads its input as SITE-local, because it does
+//      date_create( $date, wp_timezone() ). Feeding it date_created_gmt prints
+//      the UTC clock wearing the store's format. Order #84551 (11:56:01 UTC)
+//      rendered as "11:56 am" on the Segments screen while the WooCommerce
+//      order screen said "2:56 pm" — the bug reported against 3.3.17.
+//
+//   2. gmdate( 'Y-m-d 00:00:00', strtotime( $localDay ) ) looks like a
+//      conversion but is a no-op round trip, so a day the merchant typed gets
+//      compared against a UTC column as if the store were in London. For the
+//      local day 2026-08-10 on a UTC+3 store that window pulled in an order
+//      belonging to 9 August and missed the one belonging to 10 August: the
+//      same row count, entirely the wrong rows.
+//
+// The rule these functions enforce: a *_gmt / user_registered value is UTC and
+// only reaches a screen through brikpanel_local_datetime(); a Y-m-d the
+// merchant typed or a preset produced is a STORE day and only reaches SQL
+// through brikpanel_local_range_bounds_utc(). Each name carries the basis of
+// its input, so a wrong pairing reads wrong.
+//
+// Columns that are NOT UTC, and must never go through the *_utc helpers:
+// brikpanel_visitors.date_column, brikpanel_referrers.date_column,
+// brikpanel_visitor_countries.date_column,
+// brikpanel_visited_pages.date_column, brikpanel_cart_tracking.date_column,
+// brikpanel_expenses.expense_date, brikpanel_stock_orders.*_date and
+// brikpanel_ad_spend.date are all written in site-local time on purpose.
+
+if ( ! function_exists( 'brikpanel_date_format' ) ) {
+	/**
+	 * The store's date format, with a sane fallback.
+	 *
+	 * Memoized per blog id: on multisite the same PHP process serves several
+	 * stores across switch_to_blog(), and an unkeyed static would hand blog 1's
+	 * format to every other site in the network.
+	 *
+	 * @return string
+	 */
+	function brikpanel_date_format() {
+		static $cache = array();
+
+		$blog = function_exists( 'get_current_blog_id' ) ? (int) get_current_blog_id() : 0;
+
+		if ( ! isset( $cache[ $blog ] ) ) {
+			$fmt            = (string) get_option( 'date_format' );
+			$cache[ $blog ] = '' !== $fmt ? $fmt : 'F j, Y';
+		}
+
+		return $cache[ $blog ];
+	}
+}
+
+if ( ! function_exists( 'brikpanel_time_format' ) ) {
+	/**
+	 * The store's time format, with a sane fallback. Memoized per blog id.
+	 *
+	 * @return string
+	 */
+	function brikpanel_time_format() {
+		static $cache = array();
+
+		$blog = function_exists( 'get_current_blog_id' ) ? (int) get_current_blog_id() : 0;
+
+		if ( ! isset( $cache[ $blog ] ) ) {
+			$fmt            = (string) get_option( 'time_format' );
+			$cache[ $blog ] = '' !== $fmt ? $fmt : 'g:i a';
+		}
+
+		return $cache[ $blog ];
+	}
+}
+
+if ( ! function_exists( 'brikpanel_datetime_format' ) ) {
+	/**
+	 * The store's date + time format.
+	 *
+	 * Replaces the literal get_option('date_format') . ' ' . get_option('time_format')
+	 * that was written out at thirteen separate call sites, two of which had
+	 * drifted into their own fallback spellings.
+	 *
+	 * @return string
+	 */
+	function brikpanel_datetime_format() {
+		return brikpanel_date_format() . ' ' . brikpanel_time_format();
+	}
+}
+
+if ( ! function_exists( 'brikpanel_short_date_format' ) ) {
+	/**
+	 * The store's date format with short month and weekday names, for a date
+	 * in a narrow column: "F j, Y" becomes "M j, Y" (Sep 10, 2026, as the
+	 * WooCommerce orders list writes it), "l, j F Y" becomes "D, j M Y". The
+	 * store keeps its own order and separators; escaped letters stay as they are.
+	 *
+	 * @return string
+	 */
+	function brikpanel_short_date_format() {
+		return (string) preg_replace( array( '/(?<!\\\\)F/', '/(?<!\\\\)l/' ), array( 'M', 'D' ), brikpanel_date_format() );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_utc_datetime' ) ) {
+	/**
+	 * Parse a UTC datetime string out of the database, strictly.
+	 *
+	 * Deliberately stricter than the strtotime( $s . ' +00:00' ) idiom used
+	 * elsewhere in the plugin. That idiom is correct but fragile: strtotime()
+	 * accepts relative text, so a stray 'yesterday' parses happily, and
+	 * strtotime( ' +00:00' ) on an empty column returns NOW — which is why
+	 * every call site using it has to guard the empty string separately.
+	 * Concentrating the strictness here is the whole point of a shared helper.
+	 *
+	 * @param mixed $utc_sql 'Y-m-d H:i:s' (or 'Y-m-dTH:i:s') in UTC.
+	 * @return DateTimeImmutable|null Null for empty, zero or unparseable input.
+	 */
+	function brikpanel_utc_datetime( $utc_sql ) {
+		if ( ! is_string( $utc_sql ) && ! is_numeric( $utc_sql ) ) {
+			return null;
+		}
+
+		$s = trim( (string) $utc_sql );
+
+		// '0000-00-00 00:00:00' is truthy in PHP, so a bare `$row->col ? ... : ''`
+		// guard lets it through, and every conversion path then renders it as
+		// '-0001-11-30'. MIN()/MAX() over a table holding one zero row returns
+		// exactly this.
+		if ( '' === $s || 0 === strncmp( $s, '0000-00-00', 10 ) ) {
+			return null;
+		}
+
+		// Must LOOK like a stored datetime. Without this, DateTimeImmutable
+		// accepts relative phrases: 'yesterday' parses to an actual date.
+		if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}([ T]\d{1,2}:\d{2}(:\d{2})?)?$/', $s ) ) {
+			return null;
+		}
+
+		try {
+			return new DateTimeImmutable( $s, new DateTimeZone( 'UTC' ) );
+		} catch ( Exception $e ) {
+			return null;
+		}
+	}
+}
+
+if ( ! function_exists( 'brikpanel_local_datetime' ) ) {
+	/**
+	 * Render a UTC datetime column the way the store's staff read the clock.
+	 *
+	 * Use this for date_created_gmt, post_date_gmt, user_registered, and any
+	 * MIN()/MAX() of those. NEVER for a site-local column.
+	 *
+	 * wp_date() rather than get_date_from_gmt(): the latter formats with
+	 * DateTime::format(), which does not translate month or day names, so a
+	 * Turkish or Arabic admin would be served a bare "September".
+	 *
+	 * @param mixed       $utc_sql  UTC 'Y-m-d H:i:s' as stored.
+	 * @param string|null $format   PHP date format. Null = brikpanel_datetime_format().
+	 * @param string      $fallback Returned for empty / zero / unparseable input.
+	 * @return string
+	 */
+	function brikpanel_local_datetime( $utc_sql, $format = null, $fallback = '' ) {
+		$dt = brikpanel_utc_datetime( $utc_sql );
+
+		if ( null === $dt ) {
+			return (string) $fallback;
+		}
+
+		return (string) wp_date( null === $format ? brikpanel_datetime_format() : (string) $format, $dt->getTimestamp() );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_local_date' ) ) {
+	/**
+	 * Date-only rendering of a UTC column, in the store's timezone and format.
+	 *
+	 * @param mixed  $utc_sql  UTC 'Y-m-d H:i:s' as stored.
+	 * @param string $fallback Returned for empty / zero / unparseable input.
+	 * @return string
+	 */
+	function brikpanel_local_date( $utc_sql, $fallback = '' ) {
+		return brikpanel_local_datetime( $utc_sql, brikpanel_date_format(), $fallback );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_local_day' ) ) {
+	/**
+	 * The store-local calendar day of a UTC stamp, as machine-readable 'Y-m-d'.
+	 *
+	 * format(), not wp_date(): the result is a key or a bucket label, not prose,
+	 * so it must never be translated.
+	 *
+	 * @param mixed $utc_sql UTC 'Y-m-d H:i:s' as stored.
+	 * @return string 'Y-m-d', or '' on bad input.
+	 */
+	function brikpanel_local_day( $utc_sql ) {
+		$dt = brikpanel_utc_datetime( $utc_sql );
+
+		if ( null === $dt ) {
+			return '';
+		}
+
+		return $dt->setTimezone( wp_timezone() )->format( 'Y-m-d' );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_store_date' ) ) {
+	/**
+	 * Now in the STORE's timezone, optionally shifted, formatted.
+	 *
+	 * Replaces gmdate( 'Y-m-d', strtotime( '-29 days' ) ), which is the UTC day:
+	 * on a UTC+3 store between local midnight and 03:00 that is yesterday, and
+	 * on a UTC-5 store after 19:00 it is tomorrow.
+	 *
+	 * The modifier is applied INSIDE wp_timezone(), so '-29 days' means 29 store
+	 * days and stays correct across a daylight-saving transition.
+	 *
+	 * Note '-1 month' keeps PHP's documented overflow behaviour: on 31 March it
+	 * lands on 3 March, not 28 February. The strtotime() code this replaces did
+	 * exactly the same, so the quirk is preserved rather than introduced. Do not
+	 * "fix" it into 'last day of previous month' — that would silently move every
+	 * monthly window in the plugin.
+	 *
+	 * @param string $format   PHP date format. Default 'Y-m-d'.
+	 * @param string $modifier DateTime::modify() string, e.g. '-29 days'. '' = now.
+	 * @return string
+	 */
+	function brikpanel_store_date( $format = 'Y-m-d', $modifier = '' ) {
+		try {
+			$dt = new DateTimeImmutable( 'now', wp_timezone() );
+
+			if ( '' !== $modifier ) {
+				$moved = $dt->modify( $modifier );
+				if ( $moved instanceof DateTimeImmutable ) {
+					$dt = $moved;
+				}
+			}
+		} catch ( Exception $e ) {
+			return (string) wp_date( $format );
+		}
+
+		return $dt->format( (string) $format );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_store_days_range' ) ) {
+	/**
+	 * A window of whole STORE days ending today, today included.
+	 *
+	 * Matches the semantics already shipped in
+	 * Brikpanel_Cart_Abandonment::resolve_date_bounds(): "Last 7 days" is seven
+	 * day buckets, not a rolling 168 hours.
+	 *
+	 * @param int $days How many days, minimum 1. 1 = today only.
+	 * @return array{from:string,to:string} Local 'Y-m-d' pair.
+	 */
+	function brikpanel_store_days_range( $days ) {
+		$days = max( 1, (int) $days );
+
+		return array(
+			'from' => brikpanel_store_date( 'Y-m-d', '-' . ( $days - 1 ) . ' days' ),
+			'to'   => brikpanel_store_date( 'Y-m-d' ),
+		);
+	}
+}
+
+if ( ! function_exists( 'brikpanel_store_month_start' ) ) {
+	/**
+	 * The first day of a STORE month, N whole months back, formatted.
+	 *
+	 * Month arithmetic in PHP overflows: on 31 March, modify('-1 month') lands
+	 * on 3 March, so gmdate('Y-m-01', strtotime('-1 month')) returns MARCH, not
+	 * February. Every monthly window and axis in the plugin was built that way,
+	 * which on the 29th to 31st of a month produced a duplicate month key and a
+	 * missing one. Anchoring to the first of the month before stepping back
+	 * removes the overflow entirely.
+	 *
+	 * @param int    $months_back Whole months back. 0 = the current month.
+	 * @param string $format      PHP date format, e.g. 'Y-m-01' or 'Y-m'.
+	 * @return string
+	 */
+	function brikpanel_store_month_start( $months_back = 0, $format = 'Y-m-01' ) {
+		try {
+			$dt = ( new DateTimeImmutable( 'now', wp_timezone() ) )->modify( 'first day of this month' );
+
+			if ( (int) $months_back !== 0 ) {
+				$moved = $dt->modify( '-' . (int) $months_back . ' months' );
+				if ( $moved instanceof DateTimeImmutable ) {
+					$dt = $moved;
+				}
+			}
+		} catch ( Exception $e ) {
+			return (string) wp_date( $format );
+		}
+
+		return $dt->format( (string) $format );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_local_day_start_utc' ) ) {
+	/**
+	 * The UTC instant at which a store-local calendar day begins.
+	 *
+	 * @param mixed $day Strict local 'Y-m-d'. Anything else yields '' (NO bound),
+	 *                   never an epoch date, so a malformed filter widens the
+	 *                   result set rather than silently emptying it.
+	 * @return string 'Y-m-d H:i:s' in UTC, or ''.
+	 */
+	function brikpanel_local_day_start_utc( $day ) {
+		$dt = brikpanel_local_day_object( $day );
+
+		if ( null === $dt ) {
+			return '';
+		}
+
+		return $dt->setTimezone( new DateTimeZone( 'UTC' ) )->format( 'Y-m-d H:i:s' );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_local_day_end_utc' ) ) {
+	/**
+	 * The UTC instant at which the day AFTER a store-local day begins.
+	 *
+	 * This is an EXCLUSIVE upper bound. Pair it with `<`, never with `<=` — a
+	 * `<=` would swallow the first second of the next day.
+	 *
+	 * '+1 day' is applied while the value is still in wp_timezone(), so it lands
+	 * on the next local midnight whatever that day's length: the 23-hour
+	 * spring-forward day and the 25-hour autumn day are both handled, which a
+	 * "start plus 86400 seconds" formulation would get wrong twice a year.
+	 *
+	 * @param mixed $day Strict local 'Y-m-d'. Anything else yields ''.
+	 * @return string 'Y-m-d H:i:s' in UTC, or ''.
+	 */
+	function brikpanel_local_day_end_utc( $day ) {
+		$dt = brikpanel_local_day_object( $day );
+
+		if ( null === $dt ) {
+			return '';
+		}
+
+		return $dt->modify( '+1 day' )->setTimezone( new DateTimeZone( 'UTC' ) )->format( 'Y-m-d H:i:s' );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_local_range_bounds_utc' ) ) {
+	/**
+	 * Both ends of an inclusive store-day range, as half-open UTC bounds.
+	 *
+	 * Half-open rather than '00:00:00' / '23:59:59' because it TILES: the range
+	 * covering local days D1..D2 is always [ dayStart(D1), dayStart(D2 + 1) ),
+	 * one formula built one way, so adjacent windows meet with no gap and no
+	 * overlap by construction. The closed form is what produced the 45-hour
+	 * "Yesterday" row that overlapped "Today" on the Store Summary screen.
+	 *
+	 * @param mixed $from Local 'Y-m-d', or '' for no lower bound.
+	 * @param mixed $to   Local 'Y-m-d' (INCLUSIVE day), or '' for no upper bound.
+	 * @return array{start:string,end_exclusive:string} Either may be '' (no bound).
+	 */
+	function brikpanel_local_range_bounds_utc( $from, $to ) {
+		return array(
+			'start'         => brikpanel_local_day_start_utc( $from ),
+			'end_exclusive' => brikpanel_local_day_end_utc( $to ),
+		);
+	}
+}
+
+if ( ! function_exists( 'brikpanel_local_day_object' ) ) {
+	/**
+	 * Strictly parse a local 'Y-m-d' into midnight in the store's timezone.
+	 *
+	 * Shared core of the two bound helpers. strtotime() is deliberately not used:
+	 * it would accept 'yesterday' and '+1 week' from a hand-edited export URL,
+	 * and the Segments CSV export is a shareable GET whose six date keys are
+	 * accepted as free text.
+	 *
+	 * @param mixed $day Local 'Y-m-d'.
+	 * @return DateTimeImmutable|null Midnight in wp_timezone(), or null.
+	 */
+	function brikpanel_local_day_object( $day ) {
+		if ( ! is_string( $day ) ) {
+			return null;
+		}
+
+		$day = trim( $day );
+
+		if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $day ) || '0000-00-00' === $day ) {
+			return null;
+		}
+
+		// The leading '!' zeroes every field the format does not state. Without
+		// it createFromFormat() fills the time from NOW, which drops the orders
+		// placed earlier in the day.
+		$dt = DateTimeImmutable::createFromFormat( '!Y-m-d', $day, wp_timezone() );
+
+		// createFromFormat() rolls impossible dates over rather than failing:
+		// '2026-02-31' becomes 3 March. The round trip rejects those.
+		if ( ! $dt instanceof DateTimeImmutable || $dt->format( 'Y-m-d' ) !== $day ) {
+			return null;
+		}
+
+		return $dt;
+	}
+}
+
+if ( ! function_exists( 'brikpanel_local_label_date' ) ) {
+	/**
+	 * Render a date LABEL that is already local wall clock, such as 'Y-m-01'.
+	 *
+	 * For values that were never an instant: a cohort month key, or the
+	 * start_local/end_local strings a range resolver produced. Passing one of
+	 * these through strtotime() parses it as UTC, and wp_date() then adds the
+	 * site offset on top, which prints the previous day on every store west of
+	 * UTC. Constructing it in wp_timezone() keeps the label as written.
+	 *
+	 * @param mixed       $local_date 'Y-m-d' (or 'Y-m-d H:i:s') in store time.
+	 * @param string|null $format     PHP date format. Null = brikpanel_date_format().
+	 * @param string      $fallback   Returned when the input cannot be read.
+	 * @return string
+	 */
+	function brikpanel_local_label_date( $local_date, $format = null, $fallback = '' ) {
+		if ( ! is_string( $local_date ) ) {
+			return (string) $fallback;
+		}
+
+		$s = trim( $local_date );
+
+		if ( ! preg_match( '/^(\d{4}-\d{2}-\d{2})/', $s, $m ) || '0000-00-00' === $m[1] ) {
+			return (string) $fallback;
+		}
+
+		$dt = brikpanel_local_day_object( $m[1] );
+
+		if ( null === $dt ) {
+			return (string) $fallback;
+		}
+
+		return (string) wp_date( null === $format ? brikpanel_date_format() : (string) $format, $dt->getTimestamp() );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_utc_bucket_sql' ) ) {
+	/**
+	 * A 15-minute UTC bucket expression for GROUP BY, safe inside $wpdb->prepare().
+	 *
+	 * Two traps this avoids, both of which fail silently:
+	 *
+	 *   CONVERT_TZ( col, '+00:00', 'Europe/London' ) returns NULL unless the
+	 *   mysql.time_zone_* tables are populated, and on most shared hosts they are
+	 *   empty. NULL does not shift a chart, it blanks it.
+	 *
+	 *   $wpdb->prepare() consumes a single '%', so a DATE_FORMAT mask has to be
+	 *   written with '%%' or the query errors out and get_results() returns NULL.
+	 *
+	 * So bucket in SQL with pure string formatting and fold the buckets into
+	 * local days in PHP with brikpanel_local_day(). Every real UTC offset is a
+	 * whole multiple of 15 minutes, so a bucket can never straddle a local
+	 * midnight: exact for +03:00, +05:30 and +05:45 alike, and correct across a
+	 * daylight-saving change because each bucket converts on its own timestamp.
+	 *
+	 * @param string $column   Fully qualified UTC column, e.g. 'o.date_created_gmt'.
+	 * @param bool   $prepared  True (default) when the expression is going into a
+	 *                          $wpdb->prepare() string, which needs '%%'. False for
+	 *                          a raw query. Getting this wrong does not error: the
+	 *                          mask survives as literal text and every bucket comes
+	 *                          back unparseable, so the result silently folds to
+	 *                          nothing.
+	 * @return string
+	 */
+	function brikpanel_utc_bucket_sql( $column, $prepared = true ) {
+		$column = (string) $column;
+		$pc     = $prepared ? '%%' : '%';
+
+		return "CONCAT(DATE_FORMAT({$column}, '{$pc}Y-{$pc}m-{$pc}d {$pc}H:'), LPAD(FLOOR(MINUTE({$column})/15)*15, 2, '0'))";
+	}
+}
+
+if ( ! function_exists( 'brikpanel_db_clock_offset_to_utc' ) ) {
+	/**
+	 * Seconds to add to a MySQL CURRENT_TIMESTAMP value to reach UTC.
+	 *
+	 * brikpanel_customer_metrics.computed_at defaults to CURRENT_TIMESTAMP, which
+	 * is the database session's timezone — deliberately, because the stale-row
+	 * prune compares against that same clock. That makes the column neither UTC
+	 * nor store-local, so it cannot be rendered by either rule until it is first
+	 * moved onto a known basis.
+	 *
+	 * One query per request, memoized. Returns 0 if the query fails, which
+	 * degrades to today's behaviour rather than to a wrong offset.
+	 *
+	 * @return int
+	 */
+	function brikpanel_db_clock_offset_to_utc() {
+		static $offset = null;
+
+		if ( null !== $offset ) {
+			return $offset;
+		}
+
+		global $wpdb;
+
+		$offset = 0;
+
+		if ( $wpdb instanceof wpdb ) {
+			$value = $wpdb->get_var( 'SELECT TIMESTAMPDIFF(SECOND, CURRENT_TIMESTAMP, UTC_TIMESTAMP())' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+
+			if ( null !== $value ) {
+				$offset = (int) $value;
+			}
+		}
+
+		return $offset;
+	}
+}
+
+if ( ! function_exists( 'brikpanel_db_clock_to_utc' ) ) {
+	/**
+	 * Move a database-clock timestamp (CURRENT_TIMESTAMP) onto the UTC basis.
+	 *
+	 * @param mixed $db_sql 'Y-m-d H:i:s' as written by CURRENT_TIMESTAMP.
+	 * @return string UTC 'Y-m-d H:i:s', or '' when the input cannot be read.
+	 */
+	function brikpanel_db_clock_to_utc( $db_sql ) {
+		$dt = brikpanel_utc_datetime( $db_sql );
+
+		if ( null === $dt ) {
+			return '';
+		}
+
+		return gmdate( 'Y-m-d H:i:s', $dt->getTimestamp() + brikpanel_db_clock_offset_to_utc() );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_month_bucket_sql' ) ) {
+	/**
+	 * A GROUP BY expression that lets a UTC column be folded into STORE months.
+	 *
+	 * Grouping a *_gmt column with DATE_FORMAT(col, '%Y-%m') buckets by the UTC
+	 * month, so every order placed within the store's UTC offset of a month
+	 * boundary is counted in the wrong month. On the test data that moved money
+	 * in 4 of 35 months.
+	 *
+	 * The obvious fix, 15-minute buckets everywhere (see
+	 * brikpanel_utc_bucket_sql), is exact but returns up to 96 rows per day.
+	 * That is unnecessary here: an order on a UTC day in the MIDDLE of a month
+	 * lands in the same store month whatever the offset, because no real offset
+	 * reaches 24 hours. Only the first and last UTC day of a month can straddle
+	 * a store month boundary, so those alone need fine resolution. Measured on
+	 * the same data, that is 602 rows where 15-minute buckets returned 2326, and
+	 * it folds to exactly the same totals.
+	 *
+	 * Both shapes come back as parseable UTC datetime strings, so the caller
+	 * folds them with brikpanel_local_day() and takes the first seven
+	 * characters. They also still sort lexicographically in date order, which
+	 * keeps any ORDER BY on the alias meaningful.
+	 *
+	 * The %% are mandatory: $wpdb->prepare() consumes a single %.
+	 *
+	 * @param string $column   Fully qualified UTC column, e.g. 'o.date_created_gmt'.
+	 * @param bool   $prepared  True (default) when the expression is going into a
+	 *                          $wpdb->prepare() string. See brikpanel_utc_bucket_sql().
+	 * @return string
+	 */
+	function brikpanel_month_bucket_sql( $column, $prepared = true ) {
+		$column = (string) $column;
+		$pc     = $prepared ? '%%' : '%';
+
+		return "CASE WHEN DAYOFMONTH({$column}) = 1 OR DATE({$column}) = LAST_DAY({$column})
+		             THEN " . brikpanel_utc_bucket_sql( $column, $prepared ) . "
+		             ELSE DATE_FORMAT({$column}, '{$pc}Y-{$pc}m-{$pc}d 12:00') END";
+	}
+}
+
+if ( ! function_exists( 'brikpanel_local_month_case_sql' ) ) {
+	/**
+	 * A SQL expression mapping a UTC column to the STORE month it falls in.
+	 *
+	 * For places that must resolve the month inside SQL because the whole
+	 * aggregation happens there and pulling every row into PHP is not an option
+	 * (the cohort-retention job self-joins its source three times).
+	 *
+	 * The month boundaries are computed here, in wp_timezone(), one per month,
+	 * and emitted as literal UTC instants. That makes the mapping exact and
+	 * daylight-saving correct, unlike adding a single fixed offset in SQL, which
+	 * is wrong for half the year on any store that changes its clocks. It also
+	 * avoids CONVERT_TZ, which returns NULL wherever mysql.time_zone_* is empty.
+	 *
+	 * Rows older than the enumerated window fall back to the UTC month. That
+	 * fallback is never used for a row inside the caller's window, because the
+	 * enumeration deliberately reaches one month further back than asked; it only
+	 * has to be good enough to establish that a row is older than the window.
+	 *
+	 * The boundary strings are generated from DateTimeImmutable, never from
+	 * user input, and are additionally escaped.
+	 *
+	 * @param string $column      Fully qualified UTC column, e.g. 'o.date_created_gmt'.
+	 * @param int    $months_back How many whole months back the window reaches.
+	 * @return string SQL expression yielding 'Y-m-01'.
+	 */
+	function brikpanel_local_month_case_sql( $column, $months_back ) {
+		$column      = (string) $column;
+		$months_back = max( 1, (int) $months_back );
+		$utc         = new DateTimeZone( 'UTC' );
+
+		// One month further back than asked, so a caller's own cutoff never lands
+		// on the fallback branch.
+		$branches = array();
+
+		for ( $i = $months_back + 1; $i >= 0; $i-- ) {
+			$month_start = brikpanel_local_day_object( brikpanel_store_month_start( $i ) );
+
+			if ( null === $month_start ) {
+				continue;
+			}
+
+			$label = $month_start->format( 'Y-m-d' );
+			$from  = $month_start->setTimezone( $utc )->format( 'Y-m-d H:i:s' );
+			$to    = $month_start->modify( '+1 month' )->setTimezone( $utc )->format( 'Y-m-d H:i:s' );
+
+			$branches[] = sprintf(
+				"WHEN %s >= '%s' AND %s < '%s' THEN '%s'",
+				$column,
+				esc_sql( $from ),
+				$column,
+				esc_sql( $to ),
+				esc_sql( $label )
+			);
+		}
+
+		$fallback = "DATE_FORMAT({$column}, '%Y-%m-01')";
+
+		if ( ! $branches ) {
+			return $fallback;
+		}
+
+		return 'CASE ' . implode( ' ', $branches ) . ' ELSE ' . $fallback . ' END';
+	}
+}
+
+if ( ! function_exists( 'brikpanel_out_of_stock_url' ) ) {
+	/**
+	 * The products list filtered to published, out-of-stock products: the same
+	 * set the top bar's "Out of stock" count and the dashboard's Low stock card
+	 * count, so the number and the rows on the target screen agree. BrikPanel's
+	 * products list when it is on, WooCommerce's otherwise.
+	 *
+	 * @return string
+	 */
+	function brikpanel_out_of_stock_url() {
+		$modern = function_exists( 'brikpanel_module_available' )
+			? brikpanel_module_available( 'brikpanel-products' )
+			: 'yes' === get_option( 'brikpanel_modern_products_list', 'yes' );
+		return $modern
+			? admin_url( 'admin.php?page=brikpanel-products&bpl_stock=outofstock&bpl_status=publish' )
+			: admin_url( 'edit.php?post_type=product&stock_status=outofstock&post_status=publish' );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_db_supports_window_functions' ) ) {
+	/**
+	 * Whether the database server runs window functions (NTILE() OVER ...),
+	 * which the customer RFM scoring needs: MySQL 8.0+ or MariaDB 10.2+.
+	 *
+	 * $wpdb->db_version() alone is not enough. With mysqlnd older than PHP
+	 * 8.0.16 / 8.1.3, a MariaDB server reports "5.5.5-10.x.y-MariaDB", so
+	 * db_version() says "5.5.5" and a MariaDB 10.x store looked unsupported.
+	 * MariaDB 10.0/10.1 report "10.x", which passed an "8.0" check but has
+	 * no window functions. So MariaDB is read from the server string (same
+	 * "5.5.5-" rule as wpdb::has_cap()) and held to its own minimum.
+	 *
+	 * @return bool
+	 */
+	function brikpanel_db_supports_window_functions() {
+		static $supported = null;
+		if ( null !== $supported ) {
+			return $supported;
+		}
+
+		global $wpdb;
+		$info = method_exists( $wpdb, 'db_server_info' ) ? (string) $wpdb->db_server_info() : '';
+
+		if ( '' !== $info && false !== stripos( $info, 'MariaDB' ) ) {
+			$info      = preg_replace( '/^5\.5\.5-/', '', $info );
+			$version   = (string) preg_replace( '/[^0-9.].*/', '', $info );
+			$supported = '' !== $version && version_compare( $version, '10.2', '>=' );
+			return $supported;
+		}
+
+		// MySQL, or no server string (a db drop-in): the version WordPress reads.
+		$version   = (string) $wpdb->db_version();
+		$supported = '' !== $version && version_compare( $version, '8.0', '>=' );
+		return $supported;
+	}
+}
+
+if ( ! function_exists( 'brikpanel_stock_box_unchanged' ) ) {
+	/**
+	 * Whether a stock box was saved with the quantity it opened with, so the
+	 * stored quantity has to stay. Orders keep selling while an editing screen
+	 * is open: writing the box's opening number back on save (the product
+	 * editor's 60-second autosave included) raised the stock again and let the
+	 * store oversell. WooCommerce's own editor guards the same way with
+	 * _original_stock. A box the merchant changed is still written.
+	 *
+	 * @param WC_Product $product  Product or variation, as stored before the save.
+	 * @param int        $posted   Quantity the screen sent.
+	 * @param mixed      $original The box's opening value, sent next to it; null
+	 *                             when the screen did not send one (older page).
+	 * @return bool True when the stored quantity must be kept.
+	 */
+	function brikpanel_stock_box_unchanged( $product, $posted, $original ) {
+		if ( null === $original || ! is_scalar( $original ) || ! $product instanceof WC_Product ) {
+			return false;
+		}
+		$original = trim( (string) wp_unslash( $original ) );
+		if ( '' === $original || ! is_numeric( $original ) ) {
+			return false;
+		}
+		// Tracking only now switched on: the number typed is the new stock.
+		if ( true !== $product->get_manage_stock( 'edit' ) ) {
+			return false;
+		}
+		return (int) $original === (int) $posted;
+	}
+}
+
+if ( ! function_exists( 'brikpanel_variation_follows_parent_stock' ) ) {
+	/**
+	 * Whether a variation sells from its product's shared stock (WooCommerce's
+	 * product-level stock): it counts no stock of its own while the product
+	 * does. In 'view' context WooCommerce then reports its manage_stock as
+	 * 'parent' and the product's quantity, backorder rule and SKU as its own.
+	 *
+	 * @param WC_Product $variation Variation.
+	 * @return bool
+	 */
+	function brikpanel_variation_follows_parent_stock( $variation ) {
+		return $variation instanceof WC_Product
+			&& 'parent' === $variation->get_manage_stock();
+	}
+}
+
+if ( ! class_exists( 'Brikpanel_Variation_Ids' ) ) {
+	/**
+	 * The variations of variable products, read from the posts table and kept
+	 * for the rest of the request. A variation saved, switched on or off, or
+	 * deleted drops its product's entry (clean_post_cache), so the next read
+	 * is fresh. See brikpanel_variation_ids().
+	 */
+	final class Brikpanel_Variation_Ids {
+
+		/**
+		 * Product ID => list of [variation ID, post status], in WooCommerce's
+		 * order.
+		 *
+		 * @var array<int, array<int, array{0:int, 1:string}>>
+		 */
+		private static $rows = array();
+
+		/** @var bool */
+		private static $hooked = false;
+
+		/**
+		 * The variations of one product.
+		 *
+		 * @param int $parent_id Product ID.
+		 * @return array<int, array{0:int, 1:string}>
+		 */
+		public static function rows( $parent_id ) {
+			$parent_id = (int) $parent_id;
+			if ( ! array_key_exists( $parent_id, self::$rows ) ) {
+				self::prime( array( $parent_id ) );
+			}
+			return isset( self::$rows[ $parent_id ] ) ? self::$rows[ $parent_id ] : array();
+		}
+
+		/**
+		 * Reads the variations of many products at once: a list page asks for
+		 * every row's product in one query instead of one per row.
+		 *
+		 * @param int[] $parent_ids Product IDs.
+		 */
+		public static function prime( array $parent_ids ) {
+			global $wpdb;
+			$ids = array();
+			foreach ( $parent_ids as $id ) {
+				$id = (int) $id;
+				if ( $id > 0 && ! array_key_exists( $id, self::$rows ) ) {
+					$ids[ $id ] = $id;
+				}
+			}
+			if ( ! $ids ) {
+				return;
+			}
+			if ( ! self::$hooked ) {
+				self::$hooked = true;
+				add_action( 'clean_post_cache', array( __CLASS__, 'forget' ), 10, 2 );
+			}
+			foreach ( array_chunk( array_values( $ids ), 500 ) as $chunk ) {
+				$in    = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
+				$found = $wpdb->get_results(
+					$wpdb->prepare(
+						// phpcs:ignore WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- $in holds one %d per ID.
+						"SELECT ID, post_parent, post_status FROM {$wpdb->posts}
+						 WHERE post_type = 'product_variation'
+						   AND post_status IN ('publish', 'private')
+						   AND post_parent IN ($in)
+						 ORDER BY menu_order ASC, ID ASC",
+						$chunk
+					),
+					ARRAY_N
+				);
+				foreach ( $chunk as $id ) {
+					self::$rows[ (int) $id ] = array();
+				}
+				foreach ( (array) $found as $row ) {
+					self::$rows[ (int) $row[1] ][] = array( (int) $row[0], (string) $row[2] );
+				}
+			}
+		}
+
+		/**
+		 * clean_post_cache: a variation or product changed, its list is read
+		 * again on the next call.
+		 *
+		 * @param int     $post_id Post ID.
+		 * @param WP_Post $post    Post.
+		 */
+		public static function forget( $post_id, $post = null ) {
+			if ( ! $post instanceof WP_Post ) {
+				return;
+			}
+			if ( 'product_variation' === $post->post_type ) {
+				unset( self::$rows[ (int) $post->post_parent ] );
+			} elseif ( 'product' === $post->post_type ) {
+				unset( self::$rows[ (int) $post_id ] );
+			}
+		}
+	}
+}
+
+if ( ! function_exists( 'brikpanel_variation_ids' ) ) {
+	/**
+	 * Every variation of a variable product, switched-off (private) ones
+	 * included, in WooCommerce's order (menu order, then ID).
+	 *
+	 * Read from the posts table on purpose, not through WC_Product_Variable::
+	 * get_children(). That list runs through the woocommerce_variable_
+	 * children_args and woocommerce_get_children filters, and variation
+	 * swatches plugins use them to hide switched-off variations everywhere,
+	 * the admin included (Woo Variation Swatches keeps published ones only).
+	 * BrikPanel's screens then lost those variations: the product editor did
+	 * not show them, so they could not be switched back on, a copy of the
+	 * product left them out and a bulk price change skipped them. WooCommerce's
+	 * own variation panel reads them with a query of its own for the same reason.
+	 *
+	 * @param WC_Product|int $product  Variable product or its ID.
+	 * @param string[]       $statuses Statuses to keep: publish and private (all
+	 *                                 WooCommerce counts), or publish alone for
+	 *                                 what can be bought.
+	 * @return int[]
+	 */
+	function brikpanel_variation_ids( $product, $statuses = array( 'publish', 'private' ) ) {
+		$parent_id = $product instanceof WC_Product ? (int) $product->get_id() : (int) $product;
+		if ( $parent_id <= 0 ) {
+			return array();
+		}
+		$keep = array_flip( (array) $statuses );
+		$ids  = array();
+		foreach ( Brikpanel_Variation_Ids::rows( $parent_id ) as $row ) {
+			if ( isset( $keep[ $row[1] ] ) ) {
+				$ids[] = $row[0];
+			}
+		}
+		return $ids;
+	}
+}
+
+if ( ! function_exists( 'brikpanel_prime_variation_ids' ) ) {
+	/**
+	 * Reads the variations of many products in one query, for a list that
+	 * then asks brikpanel_variation_ids() row by row.
+	 *
+	 * @param int[] $product_ids Product IDs (simple ones are harmless).
+	 */
+	function brikpanel_prime_variation_ids( array $product_ids ) {
+		Brikpanel_Variation_Ids::prime( $product_ids );
+	}
+}
+
+if ( ! function_exists( 'brikpanel_variable_stock_summary' ) ) {
+	/**
+	 * Stock of a variable product as one number: the products list badge, the
+	 * Stock column BrikPanel puts on WooCommerce's own product list, and the
+	 * quick stock edits that must not double count read it.
+	 *
+	 * Published variations that count their own stock add their quantity. The
+	 * product's shared stock counts once, however many variations sell from it
+	 * (a product with 40 in shared stock and 7 sizes used to show 280).
+	 * Switched-off (private) variations are not for sale and do not count.
+	 *
+	 * @param WC_Product $product Variable product.
+	 * @return array{qty:int|null, manage_stock:bool, backorders:bool, uses_shared:bool, own_count:int}
+	 *               qty is null when nothing is counted; own_count is how many
+	 *               published variations count their own stock.
+	 */
+	function brikpanel_variable_stock_summary( $product ) {
+		$total        = 0;
+		$manage_stock = false;
+		$backorders   = false;
+		$uses_shared  = false;
+		$own_count    = 0;
+		foreach ( brikpanel_variation_ids( $product, array( 'publish' ) ) as $cid ) {
+			$v = wc_get_product( $cid );
+			if ( ! $v || 'publish' !== $v->get_status() ) {
+				continue;
+			}
+			$managed = $v->get_manage_stock();
+			if ( 'parent' === $managed ) {
+				$uses_shared = true;
+			} elseif ( $managed ) {
+				$manage_stock = true;
+				$own_count++;
+				$total += (int) $v->get_stock_quantity();
+			}
+			if ( $v->backorders_allowed() ) {
+				$backorders = true;
+			}
+		}
+		if ( $uses_shared ) {
+			$manage_stock = true;
+			$total       += (int) $product->get_stock_quantity();
+		}
+		return [
+			'qty'          => $manage_stock ? $total : null,
+			'manage_stock' => $manage_stock,
+			'backorders'   => $backorders,
+			'uses_shared'  => $uses_shared,
+			'own_count'    => $own_count,
+		];
+	}
+}

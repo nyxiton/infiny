@@ -1,0 +1,1280 @@
+/**
+ * BrikPanel — Abandoned Carts admin list page.
+ * Follows the BrikPanel design system (monochrome, white cards on #f1f1f1).
+ *
+ * Full width, like the other BrikPanel data-table screens (Orders, Products,
+ * Coupons, Segments). It used to be a centred 1100px column, which held six
+ * columns comfortably and ran out of room at eight: turning BrikMentor on adds
+ * Phone and Follow-ups. The caps further down keep the handful of elements
+ * that should NOT grow with it (summary cards, search box) from stretching
+ * across a large monitor.
+ *
+ * Widening was not enough on its own (field test B2): with most cells
+ * `white-space: nowrap` the table still needed more room than a 1440px screen
+ * gives and the Delete column fell off the card edge. Dates and follow-up
+ * notes now wrap, addresses break at "@" and dots, and when the table still
+ * cannot fit, cart-abandonment-admin.js stacks its rows (see "Stacked rows").
+ */
+
+/* This element IS the .wrap and carries the wide page shell
+   (front-end/shared/brikpanel-ui.css, `brikpanel-shell__page`): width, both
+   gutters (also in RTL) and the top spacing come from there. */
+.brikpanel-cartab-wrap {
+	padding-bottom: 2rem;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	color: #303030;
+}
+
+/* Header */
+.brikpanel-cartab-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+	flex-wrap: wrap;
+	margin-bottom: 1rem;
+}
+
+/* Let the title column shrink (subtitle wraps as text) instead of forcing
+   the whole action row to wrap below when the coupon control appears. */
+.brikpanel-cartab-header-left {
+	flex: 1 1 260px;
+	min-width: 0;
+}
+
+.brikpanel-cartab-header-left h1 {
+	margin: 0;
+	font-size: var(--brikpanel-title-size, 1.125rem);
+	font-weight: var(--brikpanel-title-weight, 600);
+	line-height: var(--brikpanel-title-line, 1.3);
+	padding: 0;
+	color: #303030;
+}
+
+.brikpanel-cartab-subtitle {
+	margin: 0.25rem 0 0;
+	font-size: 0.8125rem;
+	color: #616161;
+	/* Keep the sentence at a readable measure now that the page is full width;
+	   inert on anything narrower than roughly a 1000px content column. */
+	max-width: 72ch;
+}
+
+.brikpanel-cartab-header-right {
+	display: flex;
+	align-items: center;
+	gap: 0.625rem;
+	flex-wrap: wrap;
+}
+
+/* Buttons */
+.brikpanel-cartab-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	padding: 0.5rem 1rem;
+	font-size: 0.8125rem;
+	font-weight: 550;
+	line-height: 1.4;
+	border-radius: 0.5rem;
+	border: 0;
+	cursor: pointer;
+	text-decoration: none;
+	transition: background 0.15s ease;
+}
+
+.brikpanel-cartab-btn-primary {
+	background: #303030;
+	color: #ffffff;
+	box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.brikpanel-cartab-btn-primary:hover {
+	background: #1a1a1a;
+	color: #ffffff;
+}
+
+.brikpanel-cartab-btn-secondary {
+	background: #ffffff;
+	color: #303030;
+	box-shadow: inset 0 0 0 1px #e3e3e3, 0 1px 0 rgba(0, 0, 0, 0.05);
+}
+
+.brikpanel-cartab-btn-secondary:hover {
+	background: #f7f7f7;
+	color: #303030;
+}
+
+.brikpanel-cartab-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+/* Popup toggle switch. This class name belongs to the header switch only: the
+   table's row chevron has its own .brikpanel-cartab-expander family. When the
+   chevron reused this name, its 24px box and zero line height landed on this
+   label too and drew "Email" and "popup" on top of each other. The margin is
+   logical so it stays between the switch and the next control in RTL. */
+.brikpanel-cartab-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	cursor: pointer;
+	user-select: none;
+	margin-inline-end: 0.375rem;
+}
+
+.brikpanel-cartab-toggle-label {
+	font-size: 0.8125rem;
+	font-weight: 600;
+	color: #303030;
+}
+
+.brikpanel-cartab-switch {
+	position: relative;
+	display: inline-block;
+	width: 40px;
+	height: 22px;
+	flex: 0 0 auto;
+}
+
+.brikpanel-cartab-switch input {
+	position: absolute;
+	opacity: 0;
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	cursor: pointer;
+	z-index: 1;
+}
+
+.brikpanel-cartab-slider {
+	position: absolute;
+	inset: 0;
+	background: #ccc;
+	border-radius: 22px;
+	transition: background 0.15s ease;
+}
+
+.brikpanel-cartab-slider::before {
+	content: "";
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	width: 16px;
+	height: 16px;
+	background: #ffffff;
+	border-radius: 50%;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+	transition: transform 0.15s ease;
+}
+
+.brikpanel-cartab-switch input:checked + .brikpanel-cartab-slider {
+	background: #303030;
+}
+
+.brikpanel-cartab-switch input:checked + .brikpanel-cartab-slider::before {
+	transform: translateX(18px);
+}
+
+/* Cards */
+.brikpanel-cartab-card {
+	background: #ffffff;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.75rem;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+	padding: 1.25rem 1.5rem;
+	margin-bottom: 1rem;
+}
+
+.brikpanel-cartab-disabled-note {
+	color: #616161;
+	font-size: 0.8125rem;
+	border-left: 3px solid #8a8a8a;
+}
+
+.brikpanel-cartab-disabled-note p {
+	max-width: 72ch;
+}
+
+/* Summary cards. Deliberately NOT capped: they are cards, and on a full-width
+   page a capped row ends short of the filter bar and the table below it, which
+   reads as an unfinished ragged edge at the very widths the cap was meant to
+   help. Letting them fill the row keeps the page one aligned block — the same
+   call the dashboard KPI row already makes. (If a ceiling is ever wanted, put
+   it on this grid, never on the track: with a definite max track function
+   `auto-fit` computes the repetition count from the MAX, so
+   `minmax(190px, 360px)` would silently drop a 1052px container to two columns
+   and break the laptop layout.) */
+.brikpanel-cartab-summary {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+	gap: 1rem;
+	margin-bottom: 1rem;
+}
+
+.brikpanel-cartab-summary-card {
+	display: flex;
+	flex-direction: column;
+	background: #ffffff;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.75rem;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+	padding: 1rem 1.25rem;
+}
+
+.brikpanel-cartab-summary-label {
+	font-size: var(--brikpanel-label-size, 0.8125rem);
+	font-weight: var(--brikpanel-label-weight, 550);
+	text-transform: var(--brikpanel-caps-case, none);
+	letter-spacing: var(--brikpanel-caps-track, normal);
+	color: #616161;
+	margin-bottom: 0.25rem;
+}
+
+.brikpanel-cartab-summary-value {
+	font-size: 1.375rem;
+	font-weight: 600;
+	color: #303030;
+}
+
+.brikpanel-cartab-summary-meta {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+	margin-top: auto;
+	padding-top: 0.625rem;
+	border-top: 1px solid #e3e3e3;
+}
+
+.brikpanel-cartab-summary-meta-label {
+	font-size: 0.75rem;
+	font-weight: 550;
+	color: #616161;
+}
+
+.brikpanel-cartab-summary-meta-value {
+	font-size: 0.9375rem;
+	font-weight: 600;
+	color: #303030;
+}
+
+/* BrikMentor pitch under the "Abandoned" figure: a plain text link that reads
+   as the next step for that figure, not as an advert. It opens the floating
+   BrikMentor panel and is only printed while BrikMentor is being promoted. */
+.brikpanel-cartab-summary-cta {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+	align-self: flex-start;
+	margin-top: 0.625rem;
+	font-size: 0.75rem;
+	font-weight: 550;
+	color: #303030;
+	text-decoration: none;
+	border-radius: 0.375rem;
+}
+
+.brikpanel-cartab-summary-cta:hover,
+.brikpanel-cartab-summary-cta:focus {
+	color: #1a1a1a;
+	text-decoration: underline;
+}
+
+.brikpanel-cartab-summary-cta:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 2px #303030;
+}
+
+.brikpanel-cartab-summary-cta svg {
+	flex: 0 0 auto;
+}
+
+[dir="rtl"] .brikpanel-cartab-summary-cta svg {
+	transform: scaleX(-1);
+}
+
+/* brikpanel-tiles.js (data-bp-tiles) picks four in a row, 2 x 2 or a list,
+   measured: on a phone the four cards took a full-width row each (field test
+   C). A phone gets less padding and a smaller figure so two fit a row. */
+@media (max-width: 782px) {
+	.brikpanel-cartab-summary {
+		gap: 0.75rem;
+	}
+
+	.brikpanel-cartab-summary-card {
+		padding: 0.875rem 1rem;
+	}
+
+	.brikpanel-cartab-summary-value {
+		font-size: 1.25rem;
+	}
+}
+
+/* The list: figure beside its name, the value line under both. */
+.brikpanel-cartab-summary.is-tiles-list {
+	gap: 0.5rem;
+}
+
+.brikpanel-cartab-summary.is-tiles-list .brikpanel-cartab-summary-card {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	column-gap: 0.75rem;
+	align-items: baseline;
+	padding: 0.75rem 1rem;
+}
+
+.brikpanel-cartab-summary.is-tiles-list .brikpanel-cartab-summary-label {
+	margin-bottom: 0;
+}
+
+.brikpanel-cartab-summary.is-tiles-list .brikpanel-cartab-summary-value {
+	grid-column: 2;
+	grid-row: 1;
+	font-size: 1.125rem;
+	text-align: end;
+}
+
+.brikpanel-cartab-summary.is-tiles-list .brikpanel-cartab-summary-meta {
+	grid-column: 1 / -1;
+	flex-direction: row;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.75rem;
+	margin-top: 0.5rem;
+	padding-top: 0.5rem;
+}
+
+.brikpanel-cartab-summary.is-tiles-list .brikpanel-cartab-summary-cta {
+	grid-column: 1 / -1;
+	justify-self: start;
+}
+
+/* Filters — one toolbar row; every control applies itself, so no Apply button.
+   Labels live inside the controls ("All statuses"), which keeps the bar to a
+   single line and removes the stack of tiny headings above it. */
+.brikpanel-cartab-filters {
+	padding: 0.75rem 0.875rem;
+}
+
+.brikpanel-cartab-filter-row {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+/* The boxes are the shared quiet .brikpanel-control
+   (front-end/shared/brikpanel-ui.css): 40px like every filter box, where they
+   were 34px here (field test D1). Only the icon room and widths stay here. */
+.brikpanel-cartab-filter-row .brikpanel-cartab-btn {
+	min-height: var(--brikpanel-control-h, 2.5rem);
+}
+
+/* Search field with its magnifier */
+.brikpanel-cartab-search {
+	position: relative;
+	display: flex;
+	align-items: center;
+	flex: 1 1 15rem;
+	min-width: 11rem;
+	/* Only flex-grow child of the filter row — the selects are capped at 12rem
+	   and the actions cluster is pinned with margin-inline-start: auto — so
+	   without a ceiling every surplus pixel lands here and the box becomes a
+	   1600px search field. The surplus goes into the gap before the pinned
+	   cluster instead. Inert until the row is roughly 1250px wide. */
+	max-width: 26rem;
+}
+
+.brikpanel-cartab-search > svg {
+	position: absolute;
+	left: 0.625rem;
+	color: #8a8a8a;
+	pointer-events: none;
+}
+
+.brikpanel-cartab-wrap .brikpanel-cartab-search input[type="search"] {
+	width: 100%;
+	padding-inline-start: 2rem;
+}
+
+/* Selects draw the shared arrow; an icon in front takes its own room. */
+.brikpanel-cartab-select {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+}
+
+.brikpanel-cartab-wrap .brikpanel-cartab-select select {
+	max-width: 12rem;
+}
+
+.brikpanel-cartab-wrap .brikpanel-cartab-select-icon select {
+	padding-inline-start: 2rem;
+}
+
+.brikpanel-cartab-select > svg:first-child {
+	position: absolute;
+	left: 0.625rem;
+	color: #8a8a8a;
+	pointer-events: none;
+}
+
+/* Clear: quiet text button, only present while a filter is applied */
+.brikpanel-cartab-clear {
+	padding: 0.375rem 0.5rem;
+	font-size: 0.8125rem;
+	font-weight: 550;
+	line-height: 1.4;
+	color: #616161;
+	background: transparent;
+	border: 0;
+	border-radius: 0.375rem;
+	cursor: pointer;
+}
+
+.brikpanel-cartab-clear:hover {
+	color: #303030;
+	background: #f1f1f1;
+}
+
+.brikpanel-cartab-clear[hidden] {
+	display: none;
+}
+
+.brikpanel-cartab-filter-actions {
+	display: flex;
+	gap: 0.5rem;
+	/* Pins the actions to the end of the row whether or not the filters wrap,
+	   so the popover below always opens inwards from the card edge. */
+	margin-inline-start: auto;
+}
+
+/* Custom range, revealed only by the matching preset */
+.brikpanel-cartab-custom-range {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin-top: 0.625rem;
+	padding-top: 0.625rem;
+	border-top: 1px solid #f1f1f1;
+	flex-wrap: wrap;
+}
+
+.brikpanel-cartab-custom-range[hidden] {
+	display: none;
+}
+
+.brikpanel-cartab-custom-range label {
+	font-size: 0.8125rem;
+	font-weight: 600;
+	color: #616161;
+}
+
+.brikpanel-cartab-range-sep {
+	color: #8a8a8a;
+}
+
+/* Columns popover: visibility toggles + drag handles */
+.brikpanel-cartab-columns-menu {
+	position: relative;
+}
+
+.brikpanel-cartab-columns-popover {
+	position: absolute;
+	top: calc(100% + 0.375rem);
+	right: 0;
+	z-index: 20;
+	min-width: 15rem;
+	max-height: 26rem;
+	overflow-y: auto;
+	padding: 0.5rem;
+	background: #ffffff;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.75rem;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.brikpanel-cartab-columns-popover[hidden] {
+	display: none;
+}
+
+.brikpanel-cartab-columns-hint {
+	margin: 0.125rem 0.5rem 0.5rem;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	color: #616161;
+}
+
+.brikpanel-cartab-columns-item {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: 0.125rem 0.25rem;
+	border-radius: 0.375rem;
+	cursor: grab;
+	background: #ffffff;
+}
+
+.brikpanel-cartab-columns-item:hover {
+	background: #f7f7f7;
+}
+
+.brikpanel-cartab-columns-item:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 1px #303030;
+}
+
+.brikpanel-cartab-columns-item.is-dragging {
+	opacity: 0.5;
+	cursor: grabbing;
+}
+
+.brikpanel-cartab-columns-handle {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.25rem;
+	color: #8a8a8a;
+	flex: 0 0 auto;
+}
+
+.brikpanel-cartab-columns-label {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex: 1 1 auto;
+	padding: 0.3125rem 0.25rem;
+	font-size: 0.8125rem;
+	color: #303030;
+	cursor: pointer;
+}
+
+.brikpanel-cartab-wrap .brikpanel-cartab-columns-label input[type="checkbox"] {
+	margin: 0;
+	flex: 0 0 auto;
+}
+
+.brikpanel-cartab-columns-item.is-locked .brikpanel-cartab-columns-label {
+	color: #8a8a8a;
+	cursor: default;
+}
+
+/* Table */
+.brikpanel-cartab-table-card {
+	padding: 0;
+	overflow: hidden;
+}
+
+.brikpanel-cartab-table-wrap {
+	overflow-x: auto;
+}
+
+.brikpanel-cartab-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.875rem;
+}
+
+.brikpanel-cartab-table th {
+	text-align: start;
+	padding: 0.75rem 1rem;
+	font-size: var(--brikpanel-th-size, 0.75rem);
+	font-weight: var(--brikpanel-th-weight, 600);
+	text-transform: var(--brikpanel-caps-case, none);
+	letter-spacing: var(--brikpanel-caps-track, normal);
+	color: #616161;
+	background: #fafafa;
+	border-bottom: 1px solid #e3e3e3;
+	white-space: nowrap;
+}
+
+.brikpanel-cartab-table td {
+	padding: 0.75rem 1rem;
+	border-bottom: 1px solid #f1f1f1;
+	vertical-align: middle;
+	color: #303030;
+}
+
+.brikpanel-cartab-table tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.brikpanel-cartab-email-cell {
+	font-weight: 550;
+	/* Keeps the envelope on the address's line. Deliberately not flex: the
+	   table sizes this column from its content and a flex cell would stop
+	   contributing an intrinsic width. */
+	white-space: nowrap;
+}
+
+/* The breakable head of an address (everything before its last piece), with
+   <wbr> after "@" and before each dot from the JS. The last piece stays in the
+   nowrap cell next to the envelope, so the icon never wraps onto a line alone. */
+.brikpanel-cartab-email-head {
+	white-space: normal;
+}
+
+/* The envelope beside an address. Same box, radius, inline offset, glyph size
+   and transition as .brikpanel-cartab-wa, so the two outreach marks cannot
+   drift apart in a row. Monochrome on purpose: green belongs to WhatsApp's own
+   mark, and mail has no brand to be recognised by. */
+.brikpanel-cartab-email-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.75rem;
+	height: 1.75rem;
+	margin-inline-start: 0.5rem;
+	vertical-align: middle;
+	border-radius: 0.375rem;
+	color: #616161;
+	text-decoration: none;
+	transition: color 0.15s ease, background 0.15s ease;
+	/* Anchors the padlock stamp of the locked variant. Harmless while unlocked,
+	   and kept on the shared rule so both states have the same box. */
+	position: relative;
+}
+
+.brikpanel-cartab-email-link svg {
+	width: 1rem;
+	height: 1rem;
+	display: block;
+}
+
+.brikpanel-cartab-email-link:hover,
+.brikpanel-cartab-email-link:focus {
+	color: #303030;
+	background: #f7f7f7;
+}
+
+/* The locked envelope. Reuses .brikpanel-cartab-email-link for its box, radius,
+   inline offset and 1rem glyph, so locked and unlocked cells cannot drift apart
+   in size; only the colour differs, and it is the same grey/#303030 pair the
+   locked WhatsApp mark and the plain padlock use. Both classes in the selector
+   for the same reason as .brikpanel-cartab-wa-locked: winning on specificity
+   rather than on source order keeps this true however the rules are reordered.
+   cursor: pointer because with a lock URL this is a link, and without one it is
+   a <span> that still opens the pitch. */
+.brikpanel-cartab-email-link.brikpanel-cartab-email-link-locked {
+	color: #8a8a8a;
+	cursor: pointer;
+}
+
+.brikpanel-cartab-email-link.brikpanel-cartab-email-link-locked:hover,
+.brikpanel-cartab-email-link.brikpanel-cartab-email-link-locked:focus {
+	color: #303030;
+	background: #f7f7f7;
+}
+
+.brikpanel-cartab-date-cell {
+	color: #616161;
+	font-size: 0.8125rem;
+}
+
+.brikpanel-cartab-total-cell {
+	font-weight: 550;
+	white-space: nowrap;
+}
+
+/* Column visibility. The table carries data-hide-<id> for every column the
+   current user switched off, so toggling one costs a single attribute write
+   instead of a re-render. One rule per column id. */
+.brikpanel-cartab-table[data-hide-email] .brikpanel-cartab-col-email,
+.brikpanel-cartab-table[data-hide-name] .brikpanel-cartab-col-name,
+.brikpanel-cartab-table[data-hide-phone] .brikpanel-cartab-col-phone,
+.brikpanel-cartab-table[data-hide-cart] .brikpanel-cartab-col-cart,
+.brikpanel-cartab-table[data-hide-total] .brikpanel-cartab-col-total,
+.brikpanel-cartab-table[data-hide-mail] .brikpanel-cartab-col-mail,
+.brikpanel-cartab-table[data-hide-source] .brikpanel-cartab-col-source,
+.brikpanel-cartab-table[data-hide-status] .brikpanel-cartab-col-status,
+.brikpanel-cartab-table[data-hide-created] .brikpanel-cartab-col-created,
+.brikpanel-cartab-table[data-hide-updated] .brikpanel-cartab-col-updated {
+	display: none;
+}
+
+.brikpanel-cartab-empty {
+	text-align: center;
+	color: #616161;
+	padding: 2rem 1rem !important;
+}
+
+.brikpanel-cartab-muted {
+	color: #616161;
+}
+
+.brikpanel-cartab-cart-count {
+	display: block;
+	font-weight: 550;
+}
+
+.brikpanel-cartab-cart-total {
+	display: block;
+	font-size: 0.8125rem;
+	color: #616161;
+}
+
+/* Phone + WhatsApp (BrikMentor only) */
+.brikpanel-cartab-phone-cell {
+	white-space: nowrap;
+}
+
+.brikpanel-cartab-phone {
+	font-variant-numeric: tabular-nums;
+}
+
+.brikpanel-cartab-wa {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.75rem;
+	height: 1.75rem;
+	margin-inline-start: 0.5rem;
+	vertical-align: middle;
+	border-radius: 0.375rem;
+	/* The one place brand colour earns its keep: the mark is only recognisable
+	   as WhatsApp in WhatsApp green, and a grey one read as decoration rather
+	   than as a button that opens a conversation. Deliberately a step down from
+	   the #25d366 brand value, which is a screen-brightness green built for a
+	   logo and reads as neon against this page's greys. */
+	color: #1da851;
+	text-decoration: none;
+	transition: color 0.15s ease, background 0.15s ease;
+}
+
+.brikpanel-cartab-wa svg {
+	width: 1rem;
+	height: 1rem;
+	display: block;
+}
+
+/* How many times the draft was opened, pinned to the button's top-end corner
+   so the count sits exactly where the merchant acts and no column is added.
+   Monochrome like every other count on the page; a numeral, never a word.
+   Logical offset only, so it mirrors under RTL on its own. The white ring
+   lifts it off the icon on hover, when the button gets a background. */
+.brikpanel-cartab-wa {
+	position: relative;
+}
+
+.brikpanel-cartab-wa-count {
+	position: absolute;
+	top: -0.3125rem;
+	inset-inline-end: -0.3125rem;
+	min-width: 1rem;
+	height: 1rem;
+	padding: 0 0.25rem;
+	box-sizing: border-box;
+	border-radius: 999px;
+	background: #303030;
+	color: #fff;
+	font-size: 0.6875rem;
+	font-weight: 600;
+	line-height: 1rem;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+	box-shadow: 0 0 0 2px #fff;
+	pointer-events: none;
+}
+
+.brikpanel-cartab-wa:hover,
+.brikpanel-cartab-wa:focus {
+	/* Green at rest already, so hover deepens it rather than introducing it. */
+	color: #15803c;
+	background: #f7f7f7;
+}
+
+
+/* The locked WhatsApp mark. It reuses .brikpanel-cartab-wa for its box, radius,
+   inline offset and 1rem glyph, so the locked and unlocked cells cannot drift
+   apart in size; only the colour differs. Grey at rest and #303030 on hover,
+   the same pair as the plain padlock - the green belongs to a button that
+   actually opens a conversation, and this one does not. */
+/* Both classes in the selector, not just the modifier: now that the unlocked
+   mark is green at rest these two colours are far apart, and a locked icon
+   flashing WhatsApp green would promise a conversation the store cannot open.
+   Winning on specificity rather than on source order keeps that true however
+   the rules are later reordered. */
+.brikpanel-cartab-wa.brikpanel-cartab-wa-locked {
+	color: #8a8a8a;
+	cursor: pointer;
+}
+
+.brikpanel-cartab-wa.brikpanel-cartab-wa-locked:hover,
+.brikpanel-cartab-wa.brikpanel-cartab-wa-locked:focus {
+	color: #303030;
+	background: #f7f7f7;
+}
+
+/* The padlock stamp, built as a sibling of .brikpanel-cartab-wa-count: same
+   pill, same #303030, same white ring, same pointer-events so the whole 1.75rem
+   box stays one hit target. Bottom-end rather than the count's top-end, because
+   that slot already means "a number" on this screen. Logical offsets only, so
+   it mirrors under RTL by itself. */
+.brikpanel-cartab-wa-lock {
+	position: absolute;
+	inset-block-end: -0.25rem;
+	inset-inline-end: -0.25rem;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 0.875rem;
+	height: 0.875rem;
+	box-sizing: border-box;
+	border-radius: 999px;
+	background: #303030;
+	color: #fff;
+	box-shadow: 0 0 0 2px #fff;
+	pointer-events: none;
+}
+
+/* Specific enough to beat the `svg { width: 1rem }` rule of either host above.
+   One rule for both marks: the stamp is shared, so its glyph size must be too. */
+.brikpanel-cartab-wa .brikpanel-cartab-wa-lock svg,
+.brikpanel-cartab-email-link .brikpanel-cartab-wa-lock svg {
+	width: 0.625rem;
+	height: 0.625rem;
+	display: block;
+}
+
+/* Locked stand-in, shown in the Follow-ups cell while the store has
+   no BrikMentor able to answer it. Same box as the WhatsApp mark so the row
+   height and rhythm do not change; muted, because it is a closed door and not a
+   call to action. No physical-direction properties, so it mirrors under RTL on
+   its own. */
+.brikpanel-cartab-lock {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.75rem;
+	height: 1.75rem;
+	vertical-align: middle;
+	border-radius: 0.375rem;
+	color: #8a8a8a;
+	text-decoration: none;
+	transition: color 0.15s ease, background 0.15s ease;
+}
+
+.brikpanel-cartab-lock svg {
+	width: 1rem;
+	height: 1rem;
+	display: block;
+}
+
+a.brikpanel-cartab-lock:hover,
+a.brikpanel-cartab-lock:focus {
+	color: #303030;
+	background: #f7f7f7;
+}
+
+/* Follow-up count (BrikMentor only). The cell wraps: its "Next: <date>" note
+   held the column open by the full length of a date. */
+.brikpanel-cartab-mail-count {
+	display: block;
+	font-weight: 550;
+}
+
+.brikpanel-cartab-mail-note {
+	display: block;
+	font-size: 0.8125rem;
+	color: #616161;
+}
+
+/* Badges */
+.brikpanel-cartab-badge {
+	display: inline-block;
+	padding: 0.125rem 0.5rem;
+	font-size: 0.75rem;
+	font-weight: 550;
+	border-radius: 999px;
+	white-space: nowrap;
+}
+
+.brikpanel-cartab-badge-source {
+	background: #f1f1f1;
+	color: #616161;
+}
+
+.brikpanel-cartab-badge-active {
+	background: #eef4ff;
+	color: #2c5282;
+}
+
+.brikpanel-cartab-badge-abandoned {
+	background: #fce4e4;
+	color: #c62828;
+}
+
+.brikpanel-cartab-badge-recovered {
+	background: #e4f5e1;
+	color: #1a6b15;
+}
+
+/* An email captured with an empty cart: nothing to recover yet, so it stays
+   muted rather than competing with the states worth acting on. */
+.brikpanel-cartab-badge-email_only {
+	background: #f1f1f1;
+	color: #616161;
+}
+
+/* Sold, but never abandoned first (or a duplicate row closed alongside the
+   order that got the credit). Green like Recovered because it is still a sale,
+   dialled down because no cart was won back. */
+.brikpanel-cartab-badge-converted {
+	background: #f0f5ef;
+	color: #5c7a58;
+}
+
+/* Row actions. `end`, not `right`: it mirrors in RTL, where `right` put Delete
+   on the inner edge of the cell. */
+.brikpanel-cartab-actions-cell {
+	white-space: nowrap;
+	text-align: end;
+}
+
+.brikpanel-cartab-row-btn {
+	background: transparent;
+	border: 0;
+	padding: 0.25rem 0.5rem;
+	font-size: 0.8125rem;
+	font-weight: 550;
+	color: #616161;
+	cursor: pointer;
+	border-radius: 0.375rem;
+	transition: background 0.15s ease, color 0.15s ease;
+}
+
+.brikpanel-cartab-row-btn:hover {
+	background: #f1f1f1;
+	color: #303030;
+}
+
+.brikpanel-cartab-row-btn-danger:hover {
+	background: #fce4e4;
+	color: #c62828;
+}
+
+/* Row expander: the chevron that replaced the old "Details" button. Kept as
+   narrow as the icon so the table gives the width back to the data columns.
+   It has its own class family on purpose; it once shared .brikpanel-cartab-toggle
+   with the header switch, and one unscoped rule then styled both. Logical sides,
+   so the column mirrors in RTL: the outer padding stays, the inner one goes. */
+.brikpanel-cartab-expander-th,
+.brikpanel-cartab-expander-cell {
+	width: 1%;
+	padding-inline-end: 0 !important;
+	white-space: nowrap;
+}
+
+/* The end margin is the gap to the first data column, since the cell has no
+   inner padding. */
+.brikpanel-cartab-expander {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.5rem;
+	height: 1.5rem;
+	margin-inline-end: 0.375rem;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: #8a8a8a;
+	line-height: 0;
+	cursor: pointer;
+	user-select: none;
+	border-radius: 0.375rem;
+	transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.brikpanel-cartab-expander:hover {
+	color: #303030;
+	background: #f1f1f1;
+}
+
+.brikpanel-cartab-expander:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 2px #303030;
+}
+
+.brikpanel-cartab-chevron {
+	transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.brikpanel-cartab-expander[aria-expanded="true"] {
+	color: #303030;
+}
+
+.brikpanel-cartab-expander[aria-expanded="true"] .brikpanel-cartab-chevron {
+	transform: rotate(90deg);
+}
+
+/* Right-to-left: the closed chevron points into the row, so it flips. Open, it
+   points down in both directions, so only the closed state is mirrored. */
+[dir="rtl"] .brikpanel-cartab-chevron {
+	transform: scaleX(-1);
+}
+
+[dir="rtl"] .brikpanel-cartab-expander[aria-expanded="true"] .brikpanel-cartab-chevron {
+	transform: scaleX(-1) rotate(-90deg);
+}
+
+/* The open row and its details share one block of colour, so they read as a
+   single unit rather than two stacked rows. */
+.brikpanel-cartab-table tbody tr.is-expanded > td {
+	background: #fafafa;
+	border-bottom-color: transparent;
+}
+
+/* Details row.
+   Collapsed with grid-template-rows 0fr -> 1fr instead of [hidden], so it can
+   animate. The cell itself carries no padding and no border while closed,
+   which is what lets the row collapse to zero height rather than leaving a
+   one-pixel sliver between rows. */
+.brikpanel-cartab-details-row > td {
+	background: #fafafa;
+	padding: 0 !important;
+	border-bottom: 0;
+}
+
+/* Empty cell under the chevron; it only has to carry the band of colour. */
+.brikpanel-cartab-details-spacer {
+	width: 1%;
+}
+
+.brikpanel-cartab-details-row.is-open > td {
+	border-bottom: 1px solid #f1f1f1;
+}
+
+.brikpanel-cartab-details-collapse {
+	display: grid;
+	grid-template-rows: 0fr;
+	opacity: 0;
+	transition: grid-template-rows 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+	            opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.brikpanel-cartab-details-row.is-open .brikpanel-cartab-details-collapse {
+	grid-template-rows: 1fr;
+	opacity: 1;
+}
+
+.brikpanel-cartab-details-clip {
+	overflow: hidden;
+}
+
+.brikpanel-cartab-details {
+	display: flex;
+	flex-direction: column;
+	gap: 0.375rem;
+	font-size: 0.8125rem;
+	padding: 0.75rem 1rem 0.875rem;
+}
+
+/* Stacked rows.
+   cart-abandonment-admin.js adds .is-stacked when the table cannot show every
+   column inside the card. Each cart becomes a card of label-over-value tiles in
+   the user's column order, the expand chevron in a gutter at the start and
+   Delete on its own line. Only the generic cell rule sets display, so the
+   data-hide-<id> rules (more specific) keep switched-off columns hidden, and it
+   comes after the is-expanded cell rule above so its transparent background
+   wins the tie. Closed details rows keep [hidden]: nothing here sets their
+   display unless they are open. */
+.brikpanel-cartab-table.is-stacked,
+.brikpanel-cartab-table.is-stacked > tbody {
+	display: block;
+}
+
+.brikpanel-cartab-table.is-stacked > thead {
+	display: none;
+}
+
+.brikpanel-cartab-table.is-stacked > tbody > tr:not(.brikpanel-cartab-details-row) {
+	position: relative;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+	gap: 0.625rem 1rem;
+	padding: 0.875rem 1rem;
+	padding-inline-start: 2.75rem;
+}
+
+.brikpanel-cartab-table.is-stacked > tbody > tr.brikpanel-cartab-details-row:not([hidden]) {
+	display: block;
+}
+
+.brikpanel-cartab-table.is-stacked > tbody > tr:not(:first-child) {
+	border-top: 1px solid #f1f1f1;
+}
+
+.brikpanel-cartab-table.is-stacked > tbody > tr.brikpanel-cartab-details-row {
+	border-top: 0;
+	background: #fafafa;
+}
+
+.brikpanel-cartab-table.is-stacked > tbody > tr.is-expanded {
+	background: #fafafa;
+}
+
+.brikpanel-cartab-table.is-stacked > tbody > tr > td {
+	display: block;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	text-align: start;
+	overflow-wrap: anywhere;
+}
+
+.brikpanel-cartab-table.is-stacked td[data-bp-label]::before {
+	content: attr(data-bp-label);
+	display: block;
+	margin-bottom: 0.125rem;
+	font-size: 0.75rem;
+	font-weight: 600;
+	color: #616161;
+}
+
+.brikpanel-cartab-table.is-stacked .brikpanel-cartab-expander-cell {
+	position: absolute;
+	inset-inline-start: 0.625rem;
+	inset-block-start: 0.75rem;
+	width: auto;
+}
+
+.brikpanel-cartab-table.is-stacked .brikpanel-cartab-details-spacer {
+	display: none;
+}
+
+.brikpanel-cartab-table.is-stacked .brikpanel-cartab-details {
+	padding-inline-start: 2.75rem;
+}
+
+.brikpanel-cartab-table.is-stacked .brikpanel-cartab-actions-cell {
+	grid-column: 1 / -1;
+}
+
+/* The "Loading" / "No emails" row has no chevron, so no gutter either. */
+.brikpanel-cartab-table.is-stacked > tbody > tr:has(> .brikpanel-cartab-empty) {
+	padding-inline-start: 1rem;
+}
+
+.brikpanel-cartab-table.is-stacked .brikpanel-cartab-empty {
+	grid-column: 1 / -1;
+	text-align: center;
+}
+
+/* Delete's text lines up with the tiles above it. */
+.brikpanel-cartab-table.is-stacked .brikpanel-cartab-actions-cell .brikpanel-cartab-row-btn {
+	margin-inline-start: -0.5rem;
+}
+
+/* In a narrow tile the WhatsApp mark may drop under the number; the number
+   itself stays on one line. */
+.brikpanel-cartab-table.is-stacked .brikpanel-cartab-phone-cell {
+	white-space: normal;
+}
+
+.brikpanel-cartab-table.is-stacked .brikpanel-cartab-phone {
+	white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.brikpanel-cartab-chevron,
+	.brikpanel-cartab-details-collapse {
+		transition: none;
+	}
+}
+
+.brikpanel-cartab-details-item {
+	display: flex;
+	align-items: baseline;
+	gap: 0.625rem;
+	flex-wrap: wrap;
+}
+
+.brikpanel-cartab-details-name {
+	font-weight: 550;
+	color: #303030;
+}
+
+.brikpanel-cartab-details-attrs {
+	color: #616161;
+}
+
+.brikpanel-cartab-details-sku {
+	color: #616161;
+	font-size: 0.75rem;
+}
+
+.brikpanel-cartab-details-order {
+	margin-top: 0.25rem;
+	font-weight: 550;
+	color: #303030;
+	text-decoration: underline;
+}
+
+/* Pagination */
+.brikpanel-cartab-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 1rem;
+	padding: 0.875rem 1rem;
+	border-top: 1px solid #e3e3e3;
+}
+
+.brikpanel-cartab-page-info {
+	font-size: 0.8125rem;
+	color: #616161;
+	font-weight: 550;
+}
+
+/* Popup coupon discount control (header, next to the toggle) */
+.brikpanel-cartab-discount {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin-inline-end: 0.375rem;
+}
+
+.brikpanel-cartab-discount-group {
+	display: inline-flex;
+	align-items: stretch;
+	border: 1px solid #8a8a8a;
+	border-radius: 0.5rem;
+	overflow: hidden;
+	background: #ffffff;
+}
+
+.brikpanel-cartab-wrap .brikpanel-cartab-discount-group input[type="number"] {
+	width: 3.25rem;
+	border: 0;
+	border-radius: 0;
+	padding: 0.375rem 0.5rem;
+	font-size: 0.8125rem;
+	font-weight: 600;
+	color: #303030;
+	text-align: right;
+	min-height: 0;
+	box-shadow: none;
+	background: #ffffff;
+}
+
+.brikpanel-cartab-wrap .brikpanel-cartab-discount-group input[type="number"]:focus {
+	outline: none;
+	box-shadow: none;
+}
+
+.brikpanel-cartab-discount-group:focus-within {
+	border-color: #303030;
+	box-shadow: 0 0 0 1px #303030;
+}
+
+.brikpanel-cartab-discount-suffix {
+	display: inline-flex;
+	align-items: center;
+	padding: 0 0.5rem;
+	background: #f7f7f7;
+	border-left: 1px solid #e3e3e3;
+	color: #616161;
+	font-size: 0.8125rem;
+	font-weight: 600;
+}

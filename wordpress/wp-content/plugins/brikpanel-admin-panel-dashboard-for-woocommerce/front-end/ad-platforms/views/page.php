@@ -1,0 +1,549 @@
+<?php
+/**
+ * BrikPanel Ad Platforms — page template.
+ *
+ * Rendered by Brikpanel_Ads_Settings::render_page().
+ * Receives:
+ *   $google_desc, $meta_desc       — connection metadata for each platform
+ *   $google_last_sync, $meta_last_sync — last sync state per platform
+ *   $google_backfill, $meta_backfill   — backfill progress per platform
+ *   $google_rows, $meta_rows        — rows of each card's account list
+ *   $store_currency                 — the store's currency code
+ *   $flash                          — { tone, message } from OAuth return
+ *   $connect_errors                 — failed-return box per platform slug, or '_page'
+ *
+ * @package BrikPanel
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+$connect_errors = isset( $connect_errors ) && is_array( $connect_errors ) ? $connect_errors : [];
+
+/**
+ * The box beside Connect / Re-authorize that says what went wrong, why, and
+ * what to do next. It stays until the next click: the toast it replaces was
+ * gone in 3.5 s, before anyone could read the reason out to their host.
+ * Filled here after a failed return from the platform, and by the script
+ * after a failed click. Empty parts stay hidden.
+ *
+ * @param array  $err         { title, reason, help, detail }
+ * @param string $extra_class
+ */
+$render_connect_error = function ( array $err, $extra_class = '' ) {
+	$title  = (string) ( $err['title'] ?? '' );
+	$reason = (string) ( $err['reason'] ?? '' );
+	$help   = (string) ( $err['help'] ?? '' );
+	$detail = (string) ( $err['detail'] ?? '' );
+	?>
+	<div class="bp-ads-connect-error<?php echo $extra_class !== '' ? ' ' . esc_attr( $extra_class ) : ''; ?>" data-role="connect-error" role="alert"<?php echo ( $title === '' && $reason === '' ) ? ' hidden' : ''; ?>>
+		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+		<div>
+			<strong data-role="connect-error-title"<?php echo $title === '' ? ' hidden' : ''; ?>><?php echo esc_html( $title ); ?></strong>
+			<p class="bp-ads-card-sub" data-role="connect-error-reason"<?php echo $reason === '' ? ' hidden' : ''; ?>><?php echo esc_html( $reason ); ?></p>
+			<p class="bp-ads-card-sub" data-role="connect-error-help"<?php echo $help === '' ? ' hidden' : ''; ?>><?php echo esc_html( $help ); ?></p>
+			<p class="bp-ads-card-sub bp-ads-connect-error-detail" data-role="connect-error-detail-row"<?php echo $detail === '' ? ' hidden' : ''; ?>>
+				<?php esc_html_e( 'Technical details:', 'brikpanel' ); ?>
+				<code dir="ltr" data-role="connect-error-detail"><?php echo esc_html( $detail ); ?></code>
+			</p>
+		</div>
+	</div>
+	<?php
+};
+
+/**
+ * Render a single platform card. Used twice — for Google and Meta — to avoid
+ * 200 lines of nearly identical markup.
+ */
+$render_platform_card = function ( $platform, $title, $tagline, $desc, $last_sync, $backfill, $locked = false, $disguise = false, $stale = false, $unreadable = false, $rows = [], $store_currency = '' ) use ( $connect_errors, $render_connect_error ) {
+	$connect_error = isset( $connect_errors[ $platform ] ) ? (array) $connect_errors[ $platform ] : [];
+	$is_connected = (bool) $desc['connected'];
+	$accounts     = (array) $desc['accounts'];
+	$last_ts      = (int) ( $last_sync['ts'] ?? 0 );
+	$last_ok      = (bool) ( $last_sync['ok'] ?? false );
+
+	// "Coming soon" skin. Two reasons we render it:
+	//   • $locked     — hard gate (Google until its Dev Token is approved).
+	//                    Button is disabled; nothing works yet.
+	//   • $disguise    — Meta: cosmetic skin only. Button is LIVE and the
+	//                    OAuth handshake runs. We only wear the skin while
+	//                    not connected; once connected we fall through to the
+	//                    normal body so the account picker / Sync / Disconnect
+	//                    are available and the integration genuinely works.
+	if ( $locked || ( $disguise && ! $is_connected ) ) {
+		$is_google   = ( $platform === Brikpanel_Ads_Tokens::PLATFORM_GOOGLE );
+		$button_live = ! $locked; // disguised → clickable; hard-locked → disabled.
+		if ( $is_google ) {
+			$pending_title = __( 'Pending Google approval', 'brikpanel' );
+			$pending_copy  = __( 'Google Ads needs to approve our API access before this connection can go live. It will be enabled automatically once approved. No action is needed from you.', 'brikpanel' );
+			$connect_label = __( 'Connect Google Ads', 'brikpanel' );
+		} else {
+			$pending_title = __( 'Pending Meta approval', 'brikpanel' );
+			$pending_copy  = __( 'Meta needs to review our app before this connection can go live. It will be enabled automatically once approved. No action is needed from you.', 'brikpanel' );
+			$connect_label = __( 'Connect Meta Ads', 'brikpanel' );
+		}
+		?>
+		<div class="bp-ads-card bp-ads-card-locked" data-platform="<?php echo esc_attr( $platform ); ?>" data-connected="0">
+			<div class="bp-ads-card-header">
+				<div class="bp-ads-card-header-left">
+					<h2><?php echo esc_html( $title ); ?></h2>
+					<p class="bp-ads-card-sub"><?php echo esc_html( $tagline ); ?></p>
+				</div>
+				<span class="bp-ads-pill" data-state="pending">
+					<span class="bp-ads-pill-dot"></span>
+					<span class="bp-ads-pill-text"><?php esc_html_e( 'Coming soon', 'brikpanel' ); ?></span>
+				</span>
+			</div>
+			<div class="bp-ads-card-body">
+				<div class="bp-ads-locked-note">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+					<div>
+						<strong><?php echo esc_html( $pending_title ); ?></strong>
+						<p class="bp-ads-card-sub">
+							<?php echo esc_html( $pending_copy ); ?>
+						</p>
+					</div>
+				</div>
+				<?php
+				if ( $button_live ) {
+					$render_connect_error( $connect_error );
+				}
+				?>
+				<div class="bp-ads-actions">
+					<?php if ( $button_live ) : ?>
+						<button type="button" class="bp-ads-btn bp-ads-btn-primary" data-action="connect">
+							<?php echo esc_html( $connect_label ); ?>
+						</button>
+						<span class="bp-ads-connect-status" data-role="connect-status" role="status" aria-live="polite"></span>
+					<?php else : ?>
+						<button type="button" class="bp-ads-btn bp-ads-btn-primary" disabled aria-disabled="true">
+							<?php echo esc_html( $connect_label ); ?>
+						</button>
+					<?php endif; ?>
+				</div>
+			</div>
+		</div>
+		<?php
+		return;
+	}
+	?>
+	<div class="bp-ads-card" data-platform="<?php echo esc_attr( $platform ); ?>" data-connected="<?php echo $is_connected ? '1' : '0'; ?>">
+		<div class="bp-ads-card-header">
+			<div class="bp-ads-card-header-left">
+				<h2><?php echo esc_html( $title ); ?></h2>
+				<p class="bp-ads-card-sub"><?php echo esc_html( $tagline ); ?></p>
+			</div>
+			<span class="bp-ads-pill" data-state="<?php echo $is_connected ? 'live' : 'off'; ?>">
+				<span class="bp-ads-pill-dot"></span>
+				<span class="bp-ads-pill-text">
+					<?php echo $is_connected
+						? esc_html__( 'Connected', 'brikpanel' )
+						: esc_html__( 'Not connected', 'brikpanel' ); ?>
+				</span>
+			</span>
+		</div>
+
+		<div class="bp-ads-card-body">
+
+			<?php if ( $unreadable ) : ?>
+				<?php
+				// Distinct from "Reconnect required": the authorisation was not
+				// refused, this site simply cannot open its own stored copy.
+				// Naming the likely cause is the difference between a merchant
+				// fixing it in a minute and filing a bug report.
+				?>
+				<div class="bp-ads-stale-note" role="alert">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>
+					<div>
+						<strong><?php esc_html_e( 'Saved connection could not be read.', 'brikpanel' ); ?></strong>
+						<p class="bp-ads-card-sub">
+							<?php esc_html_e( 'Your credentials are still stored and have not been deleted, but this site cannot decrypt them. This usually follows a change to the site address, a move to a new server, or new security keys in wp-config.php. Connect again to store a fresh copy.', 'brikpanel' ); ?>
+						</p>
+					</div>
+				</div>
+			<?php elseif ( $stale ) : ?>
+				<div class="bp-ads-stale-note" role="alert">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+					<div>
+						<strong><?php esc_html_e( 'Reconnect required', 'brikpanel' ); ?></strong>
+						<p class="bp-ads-card-sub">
+							<?php esc_html_e( 'The stored authorisation stopped working, so no new spend is being imported. Your existing history is untouched. Connect again to resume syncing.', 'brikpanel' ); ?>
+						</p>
+					</div>
+				</div>
+			<?php endif; ?>
+
+			<?php if ( ! $is_connected ) : ?>
+
+				<p class="bp-ads-card-sub">
+					<?php
+					if ( $platform === Brikpanel_Ads_Tokens::PLATFORM_GOOGLE ) {
+						esc_html_e( 'BrikPanel only reads your ad results: total daily spend, impressions and clicks. It never creates, edits or deletes anything in your account.', 'brikpanel' );
+					} else {
+						esc_html_e( 'BrikPanel will request read-only access (ads_read) to your Meta ad accounts. We only pull total daily spend, impressions and clicks.', 'brikpanel' );
+					}
+					?>
+				</p>
+				<?php if ( $platform === Brikpanel_Ads_Tokens::PLATFORM_GOOGLE ) : ?>
+					<?php
+					// This paragraph exists because the card used to promise
+					// "read-only access", and Google's consent screen then asked
+					// for "See, edit, create, and delete your Google Ads accounts
+					// and data". A merchant reported the two as contradicting each
+					// other, and assumed we had configured too wide a scope.
+					//
+					// We had not: https://www.googleapis.com/auth/adwords is the
+					// only scope the Google Ads API has, and Google renders it with
+					// that sentence. There is nothing narrower to ask for. The old
+					// wording described what BrikPanel does, not what Google grants,
+					// so it read as a promise we were visibly breaking. Say what
+					// Google will actually show, and why.
+					?>
+					<p class="bp-ads-card-sub">
+						<?php esc_html_e( 'Google’s permission screen still asks for broad access (“See, edit, create, and delete your Google Ads accounts and data”) because the Google Ads API has only one permission and offers no read-only option. If you want the permission itself narrowed, connect with a Google account that has Read-only access to the Ads account.', 'brikpanel' ); ?>
+					</p>
+				<?php endif; ?>
+				<?php $render_connect_error( $connect_error ); ?>
+				<div class="bp-ads-actions">
+					<button type="button" class="bp-ads-btn bp-ads-btn-primary" data-action="connect">
+						<?php
+						if ( $platform === Brikpanel_Ads_Tokens::PLATFORM_GOOGLE ) {
+							esc_html_e( 'Connect Google Ads', 'brikpanel' );
+						} else {
+							esc_html_e( 'Connect Meta Ads', 'brikpanel' );
+						}
+						?>
+					</button>
+					<span class="bp-ads-connect-status" data-role="connect-status" role="status" aria-live="polite"></span>
+				</div>
+
+			<?php else : ?>
+
+				<dl class="bp-ads-dl">
+					<dt><?php esc_html_e( 'Connected as', 'brikpanel' ); ?></dt>
+					<dd><?php echo esc_html( $desc['email'] ?: __( '(email not shared)', 'brikpanel' ) ); ?></dd>
+				</dl>
+
+				<?php if ( ! $accounts ) : ?>
+					<?php /* The pill turns green the moment the tokens are stored, but nothing
+					         syncs until an ad account is ticked — and the screen used to say
+					         nothing at all about that, so merchants left the page believing
+					         they were done and came back days later to an empty dashboard. */ ?>
+					<div class="bp-ads-todo-note">
+						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+						<div>
+							<strong><?php esc_html_e( 'One more step', 'brikpanel' ); ?></strong>
+							<p class="bp-ads-card-sub">
+								<?php esc_html_e( 'Choose the ad accounts to pull spend from. Click "Load accounts" below, tick them, then Save. Nothing is imported until you do.', 'brikpanel' ); ?>
+							</p>
+						</div>
+					</div>
+				<?php endif; ?>
+
+				<?php
+				// Ticked accounts in another currency than the store, known from
+				// their imported spend or from the last account list the platform
+				// returned: converted with the Settings > Currency rate, or waiting
+				// for one. The script keeps this note current while boxes change.
+				$currency_note = Brikpanel_Ads_Settings::currency_note_text( $rows, $store_currency );
+				?>
+				<fieldset class="bp-ads-field bp-ads-accounts-field" data-role="accounts-field"
+					data-saved="<?php echo esc_attr( wp_json_encode( array_values( $accounts ) ) ); ?>">
+					<legend class="bp-ads-label"><?php esc_html_e( 'Ad accounts', 'brikpanel' ); ?></legend>
+					<p class="bp-ads-help">
+						<?php esc_html_e( 'BrikPanel adds up the spend of every account you tick. Unticking an account deletes the spend imported from it.', 'brikpanel' ); ?>
+					</p>
+					<ul class="bp-ads-accounts" data-role="account-list"<?php echo $rows ? '' : ' hidden'; ?>>
+						<?php foreach ( $rows as $row ) : ?>
+							<?php
+							$meta_parts = array_filter( [
+								$row['name'] !== '' ? $row['id'] : '',
+								$row['currency'],
+								$row['status_label'],
+								$row['is_manager'] ? __( 'Manager', 'brikpanel' ) : '',
+							] );
+							?>
+							<li class="bp-ads-account">
+								<label class="bp-ads-account-label">
+									<input type="checkbox" class="bp-ads-account-check"
+										value="<?php echo esc_attr( $row['id'] ); ?>"
+										data-name="<?php echo esc_attr( $row['name'] ); ?>"
+										data-currency="<?php echo esc_attr( $row['currency'] ); ?>"
+										data-has-data="<?php echo $row['has_data'] ? '1' : '0'; ?>"
+										data-manager="<?php echo $row['is_manager'] ? '1' : '0'; ?>"
+										<?php checked( $row['selected'] ); ?>>
+									<span class="bp-ads-account-text">
+										<span class="bp-ads-account-name"><?php echo esc_html( $row['name'] !== '' ? $row['name'] : $row['id'] ); ?></span>
+										<?php if ( $meta_parts ) : ?>
+											<span class="bp-ads-account-meta"><?php echo esc_html( implode( ' · ', $meta_parts ) ); ?></span>
+										<?php endif; ?>
+									</span>
+									<?php if ( ! $row['selected'] && $row['has_data'] ) : ?>
+										<span class="brikpanel-badge bp-ads-account-badge"><?php echo esc_html( _x( 'Not selected', 'ad account that has imported spend but is not ticked', 'brikpanel' ) ); ?></span>
+									<?php endif; ?>
+								</label>
+							</li>
+						<?php endforeach; ?>
+					</ul>
+					<?php if ( ! $rows ) : ?>
+						<p class="bp-ads-accounts-empty" data-role="accounts-empty"><?php esc_html_e( 'Click "Load accounts" to see the ad accounts you can pick from.', 'brikpanel' ); ?></p>
+					<?php endif; ?>
+					<div class="bp-ads-input-row bp-ads-accounts-actions">
+						<button type="button" class="bp-ads-btn bp-ads-btn-secondary" data-action="load-accounts">
+							<?php esc_html_e( 'Load accounts', 'brikpanel' ); ?>
+						</button>
+						<button type="button" class="bp-ads-btn bp-ads-btn-primary" data-action="save-accounts" disabled>
+							<?php esc_html_e( 'Save', 'brikpanel' ); ?>
+						</button>
+					</div>
+					<div class="bp-ads-inline-hint bp-ads-currency-note" data-role="currency-note"<?php echo '' === $currency_note ? ' hidden' : ''; ?>>
+						<span data-role="currency-note-text"><?php echo esc_html( $currency_note ); ?></span>
+						<a class="brikpanel-btn brikpanel-btn--link bp-ads-currency-link" href="<?php echo esc_url( admin_url( 'admin.php?page=wc-settings&tab=brikpanel&section=currency' ) ); ?>"><?php esc_html_e( 'Set exchange rates', 'brikpanel' ); ?></a>
+					</div>
+				</fieldset>
+
+				<details class="bp-ads-manual">
+					<summary class="bp-ads-manual-summary"><?php esc_html_e( 'Can’t find your account?', 'brikpanel' ); ?></summary>
+					<div class="bp-ads-field bp-ads-manual-body">
+						<p class="bp-ads-help">
+							<?php
+							if ( $platform === Brikpanel_Ads_Tokens::PLATFORM_META ) {
+								esc_html_e( 'If your ad account is owned by a Business Manager it may not appear in the list above. Enter its ID manually. You can find it in Meta Ads Manager, shown next to the account name.', 'brikpanel' );
+							} else {
+								esc_html_e( 'Enter your Google Ads customer ID manually if it is not listed above. Digits only, no dashes. You can find it at the top-right of your Google Ads account.', 'brikpanel' );
+							}
+							?>
+						</p>
+						<div class="bp-ads-input-row">
+							<input type="text"
+								class="bp-ads-input brikpanel-control"
+								data-role="manual-account"
+								autocomplete="off"
+								placeholder="<?php echo esc_attr( $platform === Brikpanel_Ads_Tokens::PLATFORM_META ? 'act_1234567890' : '1234567890' ); ?>">
+							<button type="button" class="bp-ads-btn bp-ads-btn-primary" data-action="save-manual">
+								<?php esc_html_e( 'Add', 'brikpanel' ); ?>
+							</button>
+						</div>
+					</div>
+				</details>
+
+				<?php if ( $platform === Brikpanel_Ads_Tokens::PLATFORM_GOOGLE ) : ?>
+					<div class="bp-ads-field">
+						<label class="bp-ads-label" for="bp-ads-mcc">
+							<?php esc_html_e( 'Manager (MCC) account ID (optional)', 'brikpanel' ); ?>
+						</label>
+						<p class="bp-ads-help">
+							<?php esc_html_e( 'Only fill in if you access the chosen account through a Google Ads manager. Digits only, no dashes.', 'brikpanel' ); ?>
+						</p>
+						<p class="bp-ads-help">
+							<?php esc_html_e( 'If you fill this in, every account you tick must be under this manager.', 'brikpanel' ); ?>
+						</p>
+						<div class="bp-ads-input-row">
+							<input type="text"
+								id="bp-ads-mcc"
+								class="bp-ads-input brikpanel-control"
+								inputmode="numeric"
+								pattern="[0-9]*"
+								placeholder="1234567890"
+								value="<?php echo esc_attr( $desc['login_customer_id'] ); ?>">
+							<button type="button" class="bp-ads-btn bp-ads-btn-secondary" data-action="save-mcc">
+								<?php esc_html_e( 'Save', 'brikpanel' ); ?>
+							</button>
+						</div>
+					</div>
+				<?php endif; ?>
+
+				<div class="bp-ads-divider"></div>
+
+				<dl class="bp-ads-dl">
+					<dt><?php esc_html_e( 'Last successful sync', 'brikpanel' ); ?></dt>
+					<dd data-role="last-sync">
+						<?php
+						if ( $last_ts > 0 ) {
+							echo esc_html( human_time_diff( $last_ts, time() ) ) . ' ' . esc_html__( 'ago', 'brikpanel' );
+							if ( ! $last_ok ) {
+								echo ' <span class="bp-ads-bad">' . esc_html__( '(last attempt failed, check the error log)', 'brikpanel' ) . '</span>';
+							}
+						} else {
+							echo '—';
+						}
+						?>
+					</dd>
+				</dl>
+
+				<?php
+				$total       = (int) ( $backfill['total_chunks'] ?? 0 );
+				$completed   = (int) ( $backfill['completed_chunks'] ?? 0 );
+				$halted      = ! empty( $backfill['halted'] );
+				$halt_reason = Brikpanel_Ads_Sync::halt_reason_text( $backfill['halt_reason'] ?? '' );
+				if ( $halt_reason === '' ) {
+					$halt_reason = (string) ( $backfill['last_error'] ?? '' );
+				}
+				if ( $total > 0 && $completed < $total ) :
+					$pct = max( 0, min( 100, (int) round( ( $completed / max( 1, $total ) ) * 100 ) ) );
+					?>
+					<?php /* A stopped import used to leave this bar frozen at "2 of 13" with no
+					         explanation anywhere on the page, which is what merchants wrote in
+					         about. Say that it stopped, and why. */ ?>
+					<div class="bp-ads-backfill<?php echo $halted ? ' is-halted' : ''; ?>">
+						<div class="bp-ads-backfill-label">
+							<?php
+							if ( $halted ) {
+								esc_html_e( 'History import stopped', 'brikpanel' );
+							} else {
+								printf(
+									/* translators: 1: completed, 2: total chunks (90 days each) */
+									esc_html__( 'Loading history… %1$d of %2$d 90-day chunks done', 'brikpanel' ),
+									(int) $completed,
+									(int) $total
+								);
+							}
+							?>
+						</div>
+						<div class="bp-ads-backfill-bar">
+							<div class="bp-ads-backfill-fill" style="width: <?php echo esc_attr( $pct ); ?>%"></div>
+						</div>
+						<?php if ( $halt_reason !== '' ) : ?>
+							<p class="bp-ads-backfill-reason"><?php echo esc_html( $halt_reason ); ?></p>
+						<?php endif; ?>
+					</div>
+				<?php endif; ?>
+
+				<?php $render_connect_error( $connect_error ); ?>
+				<div class="bp-ads-actions">
+					<button type="button" class="bp-ads-btn bp-ads-btn-primary" data-action="sync-now" <?php disabled( ! $accounts ); ?>>
+						<?php esc_html_e( 'Sync now', 'brikpanel' ); ?>
+					</button>
+					<button type="button" class="bp-ads-btn bp-ads-btn-secondary" data-action="reconnect">
+						<?php esc_html_e( 'Re-authorize', 'brikpanel' ); ?>
+					</button>
+					<button type="button" class="bp-ads-btn bp-ads-btn-secondary" data-action="disconnect">
+						<?php esc_html_e( 'Disconnect', 'brikpanel' ); ?>
+					</button>
+					<span class="bp-ads-connect-status" data-role="connect-status" role="status" aria-live="polite"></span>
+				</div>
+
+			<?php endif; ?>
+
+		</div>
+	</div>
+	<?php
+};
+?>
+<div class="wrap brikpanel-ads-wrap brikpanel-shell__page">
+	<div class="bp-ads"
+		id="bp-ads"
+		data-flash-tone="<?php echo esc_attr( $flash['tone'] ); ?>"
+		data-flash-message="<?php echo esc_attr( $flash['message'] ); ?>">
+
+		<div class="bp-ads-header">
+			<div class="bp-ads-header-left">
+				<h1>
+					<?php esc_html_e( 'Ad Platforms', 'brikpanel' ); ?>
+				</h1>
+				<p class="bp-ads-subtitle">
+					<?php esc_html_e( 'Connect Google Ads and Meta Ads so BrikPanel can show real ROAS and Net Profit on the dashboard.', 'brikpanel' ); ?>
+				</p>
+			</div>
+		</div>
+		<?php brikpanel_header_end(); ?>
+
+		<div class="bp-ads-toast" id="bp-ads-toast" hidden></div>
+
+		<?php
+		if ( ! empty( $connect_errors['_page'] ) ) {
+			$render_connect_error( (array) $connect_errors['_page'], 'bp-ads-connect-error--page' );
+		}
+		?>
+
+		<div class="bp-ads-grid">
+			<?php
+			$render_platform_card(
+				Brikpanel_Ads_Tokens::PLATFORM_GOOGLE,
+				__( 'Google Ads', 'brikpanel' ),
+				__( 'Pulls daily total spend, impressions and clicks from the Google Ads accounts you choose.', 'brikpanel' ),
+				$google_desc,
+				$google_last_sync,
+				$google_backfill,
+				! empty( $google_locked ),
+				! empty( $google_disguised ),
+				! empty( $google_stale ),
+				! empty( $vault_unreadable ),
+				$google_rows,
+				$store_currency
+			);
+			$render_platform_card(
+				Brikpanel_Ads_Tokens::PLATFORM_META,
+				__( 'Meta Ads', 'brikpanel' ),
+				__( 'Pulls daily total spend, impressions and clicks from the Meta ad accounts you choose (Facebook + Instagram).', 'brikpanel' ),
+				$meta_desc,
+				$meta_last_sync,
+				$meta_backfill,
+				! empty( $meta_locked ),
+				! empty( $meta_disguised ),
+				! empty( $meta_stale ),
+				! empty( $vault_unreadable ),
+				$meta_rows,
+				$store_currency
+			);
+			?>
+		</div>
+
+		<div class="bp-ads-card bp-ads-card-wide" id="bp-ads-insights" hidden>
+			<div class="bp-ads-card-header">
+				<div class="bp-ads-card-header-left">
+					<h2><?php esc_html_e( 'Imported spend data', 'brikpanel' ); ?></h2>
+					<p class="bp-ads-card-sub">
+						<?php esc_html_e( 'Everything BrikPanel has pulled so far, broken down by month. This is the raw data behind the dashboard ROAS and Net Profit figures.', 'brikpanel' ); ?>
+					</p>
+				</div>
+				<button type="button" class="bp-ads-btn bp-ads-btn-secondary" data-action="refresh-insights">
+					<?php esc_html_e( 'Refresh', 'brikpanel' ); ?>
+				</button>
+			</div>
+			<div class="bp-ads-card-body">
+				<div id="bp-ads-insights-body"></div>
+			</div>
+		</div>
+
+		<div class="bp-ads-card bp-ads-card-wide">
+			<div class="bp-ads-card-header">
+				<div class="bp-ads-card-header-left">
+					<h2><?php esc_html_e( 'How it works', 'brikpanel' ); ?></h2>
+				</div>
+			</div>
+			<div class="bp-ads-card-body">
+				<ul class="brikpanel-bullets bp-ads-list">
+					<li><?php esc_html_e( 'Connect each platform once. Tokens are stored encrypted on this server and are sent only over HTTPS to our brksoft.com helper, which fetches your ad spend from Google and Meta.', 'brikpanel' ); ?></li>
+					<li><?php esc_html_e( 'For each account you tick, the last 3 years of daily spend are loaded in the background (90-day chunks every 30 seconds).', 'brikpanel' ); ?></li>
+					<li><?php esc_html_e( 'After that, the last 7 days are refreshed once per day to capture late corrections.', 'brikpanel' ); ?></li>
+					<li><?php esc_html_e( 'Spend is stored in each ad account’s own currency. When that differs from your store currency, the dashboard converts it with the exchange rate you enter under Settings, then Currency.', 'brikpanel' ); ?></li>
+				</ul>
+			</div>
+		</div>
+
+		<div class="bp-ads-card bp-ads-card-wide">
+			<div class="bp-ads-card-header">
+				<div class="bp-ads-card-header-left">
+					<h2><?php esc_html_e( 'Recent activity', 'brikpanel' ); ?></h2>
+					<p class="bp-ads-card-sub">
+						<?php esc_html_e( 'Last 50 entries from the sync log, errors and routine notes alike. Token values are redacted before storage.', 'brikpanel' ); ?>
+					</p>
+				</div>
+			</div>
+			<div class="bp-ads-card-body">
+				<div class="bp-ads-actions bp-ads-actions-tight">
+					<button type="button" class="bp-ads-btn bp-ads-btn-secondary" data-action="view-log">
+						<?php esc_html_e( 'View log', 'brikpanel' ); ?>
+					</button>
+					<button type="button" class="bp-ads-btn bp-ads-btn-secondary" data-action="clear-log">
+						<?php esc_html_e( 'Clear log', 'brikpanel' ); ?>
+					</button>
+				</div>
+				<div class="bp-ads-log" id="bp-ads-log" hidden></div>
+			</div>
+		</div>
+
+	</div>
+</div>

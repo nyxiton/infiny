@@ -1,0 +1,1185 @@
+/**
+ * BrikPanel — Cart Abandonment signup popup (front-end).
+ * Monochrome, Shopify-inspired design system: near-black primary, grey
+ * borders, soft radius, subtle shadow.
+ *
+ * This widget is injected into arbitrary themes, so every visual property
+ * that themes commonly restyle (buttons, inputs, headings) is declared with
+ * !important behind the overlay-scoped selector — otherwise theme button
+ * rules (e.g. outlined pink buttons) bleed into the popup.
+ */
+
+/* Handwriting for the notes over the offer drawing; the same bundled Caveat
+ * as the welcome tour. Downloaded only when a note is written. */
+@font-face {
+	font-family: "BrikPanel Caveat";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("../../assets/fonts/caveat/caveat-cyrillic.woff2") format("woff2");
+	unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+	font-family: "BrikPanel Caveat";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("../../assets/fonts/caveat/caveat-latin-ext.woff2") format("woff2");
+	unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+	font-family: "BrikPanel Caveat";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("../../assets/fonts/caveat/caveat-latin.woff2") format("woff2");
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+.brikpanel-cartab-popup-overlay {
+	position: fixed !important;
+	inset: 0 !important;
+	z-index: 999999 !important;
+	display: flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	padding: 16px;
+	margin: 0 !important;
+	background: rgba(20, 20, 20, 0.45) !important;
+	-webkit-backdrop-filter: blur(3px) saturate(1.05);
+	backdrop-filter: blur(3px) saturate(1.05);
+	opacity: 0;
+	transition: opacity 0.25s ease;
+}
+
+.brikpanel-cartab-popup-overlay.is-open {
+	opacity: 1;
+}
+
+/* Clicks go through until the card is shown (the drawing may wait a moment
+ * for its font) and again while it leaves. */
+.brikpanel-cartab-popup-overlay:not(.is-open) {
+	pointer-events: none;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup {
+	position: relative !important;
+	width: 100% !important;
+	max-width: 420px !important;
+	background: #ffffff !important;
+	border: 1px solid #e3e3e3 !important;
+	border-radius: 16px !important;
+	box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+	padding: 36px 28px 28px !important;
+	margin: 0 !important;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+	color: #303030 !important;
+	text-align: center !important;
+	overflow: hidden !important;
+	transform: translateY(10px) scale(0.985);
+	transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+	box-sizing: border-box !important;
+}
+
+/* Faint dot texture across the top of the card — quiet Stripe-style depth. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup::before {
+	content: "";
+	position: absolute;
+	inset: 0 0 auto 0;
+	height: 130px;
+	background-image: radial-gradient(circle, rgba(48, 48, 48, 0.10) 1px, transparent 1.5px);
+	background-size: 14px 14px;
+	-webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), transparent);
+	mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), transparent);
+	pointer-events: none;
+}
+
+.brikpanel-cartab-popup-overlay.is-open .brikpanel-cartab-popup {
+	transform: translateY(0) scale(1);
+}
+
+/* Staggered entrance: the words fade in a beat after the card. Text never
+ * moves; the drawing above them is its own entrance. */
+.brikpanel-cartab-popup-overlay.is-open .brikpanel-cartab-popup-title,
+.brikpanel-cartab-popup-overlay.is-open .brikpanel-cartab-popup-message,
+.brikpanel-cartab-popup-overlay.is-open .brikpanel-cartab-popup-form {
+	animation: brikpanel-cartab-fade 0.45s ease 0.12s both;
+}
+
+.brikpanel-cartab-popup-overlay.is-open .brikpanel-cartab-popup-message {
+	animation-delay: 0.18s;
+}
+
+.brikpanel-cartab-popup-overlay.is-open .brikpanel-cartab-popup-form {
+	animation-delay: 0.24s;
+}
+
+@keyframes brikpanel-cartab-fade {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup *,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup *::before,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup *::after {
+	box-sizing: border-box;
+}
+
+/* Above the offer visual: its full-width box starts inside the X on phones and
+ * took the taps meant for it (the lower third on most themes, the X itself on
+ * themes with a smaller root font size). */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-close {
+	position: absolute !important;
+	z-index: 10 !important;
+	top: 10px !important;
+	right: 12px !important;
+	left: auto !important;
+	width: 32px !important;
+	height: 32px !important;
+	min-height: 0 !important;
+	border: 0 !important;
+	background: transparent !important;
+	color: #8a8a8a !important;
+	font-size: 24px !important;
+	font-weight: 400 !important;
+	line-height: 1 !important;
+	cursor: pointer !important;
+	border-radius: 8px !important;
+	padding: 0 !important;
+	margin: 0 !important;
+	box-shadow: none !important;
+	transition: color 0.15s ease, background 0.15s ease;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-close:hover {
+	color: #303030 !important;
+	background: #f1f1f1 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-title {
+	margin: 0 0 8px !important;
+	padding: 0 !important;
+	font-size: 20px !important;
+	font-weight: 600 !important;
+	line-height: 1.3 !important;
+	color: #303030 !important;
+	text-transform: none !important;
+	letter-spacing: normal !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-message {
+	margin: 0 0 20px !important;
+	padding: 0 !important;
+	font-size: 14px !important;
+	line-height: 1.5 !important;
+	color: #616161 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-form {
+	display: flex !important;
+	flex-direction: column !important;
+	gap: 10px !important;
+	margin: 0 !important;
+	padding: 0 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-input {
+	width: 100% !important;
+	max-width: none !important;
+	min-height: 0 !important;
+	padding: 10px 12px !important;
+	margin: 0 !important;
+	font-size: 14px !important;
+	line-height: 1.5 !important;
+	color: #303030 !important;
+	background: #ffffff !important;
+	border: 1px solid #8a8a8a !important;
+	border-radius: 8px !important;
+	outline: none !important;
+	box-shadow: none !important;
+	transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-input::placeholder {
+	color: #8a8a8a !important;
+	opacity: 1 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-input:focus {
+	border-color: #303030 !important;
+	box-shadow: 0 0 0 1px #303030 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-button {
+	display: inline-flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	gap: 6px !important;
+	width: 100% !important;
+	min-height: 0 !important;
+	padding: 10px 16px !important;
+	margin: 0 !important;
+	font-size: 14px !important;
+	font-weight: 550 !important;
+	line-height: 1.5 !important;
+	color: #ffffff !important;
+	background: #303030 !important;
+	border: 0 !important;
+	border-radius: 8px !important;
+	cursor: pointer !important;
+	text-transform: none !important;
+	letter-spacing: normal !important;
+	box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+	transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-button:hover {
+	background: #1a1a1a !important;
+	color: #ffffff !important;
+	border: 0 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-button:active {
+	transform: scale(0.985);
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-button-arrow {
+	flex: 0 0 auto !important;
+	transform: translateX(0);
+	transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-button:hover .brikpanel-cartab-popup-button-arrow {
+	transform: translateX(3px);
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-button:disabled {
+	opacity: 0.6 !important;
+	cursor: default !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-note {
+	min-height: 0;
+	margin: 10px 0 0 !important;
+	font-size: 13px !important;
+	line-height: 1.4 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-note:empty {
+	margin: 0 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-note.is-error {
+	color: #d72c0d !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-note.is-success {
+	color: #1a8917 !important;
+	font-weight: 550 !important;
+}
+
+@media (max-width: 480px) {
+	.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup {
+		padding: 24px 20px 20px !important;
+	}
+}
+
+/* ==========================================================================
+ * Offer sketch: the pencil drawing of the discount at the top of the popup.
+ *
+ * Built by cart-abandonment.js on one 364 x 132 grid. Pen lines draw
+ * themselves once (pathLength 1, dash offset 1 -> 0, the welcome tour's
+ * pen), then everything stays still. Nothing moves until the card is shown
+ * (.is-drawing, set from a frame callback), so a popup that opens in a
+ * background tab draws when the tab is looked at.
+ *
+ * Theme hardening: !important only on what themes restyle and nothing
+ * animates (sizes, fills, strokes, fonts). Never on stroke-dashoffset,
+ * opacity, transform or clip-path: an !important there beats the animation
+ * and the drawing never appears.
+ * ========================================================================== */
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-sketch {
+	position: relative !important;
+	display: block !important;
+	box-sizing: border-box !important;
+	width: 100% !important;
+	max-width: none !important;
+	height: auto !important;
+	aspect-ratio: 364 / 132;
+	margin: 2px 0 18px !important;
+	padding: 0 !important;
+	/* Notes are placed from the left on the drawing's own grid, and the
+	   number reads left to right, on a right-to-left page too. */
+	direction: ltr !important;
+	container-type: inline-size;
+	pointer-events: none !important;
+}
+
+@supports not (aspect-ratio: 1 / 1) {
+	.brikpanel-cartab-popup-overlay .brikpanel-cartab-sketch {
+		height: 0 !important;
+		padding-bottom: 36.2637% !important;
+	}
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-layer {
+	position: absolute !important;
+	top: 0 !important;
+	left: 0 !important;
+	display: block !important;
+	width: 100% !important;
+	height: 100% !important;
+	max-width: none !important;
+	max-height: none !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	border: 0 !important;
+	background: none !important;
+	overflow: visible !important;
+	pointer-events: none !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-pen,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-line {
+	fill: none !important;
+	stroke: #303030 !important;
+	stroke-width: 2px !important;
+	stroke-linecap: round !important;
+	stroke-linejoin: round !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-pen {
+	stroke-dasharray: 1 !important;
+	stroke-dashoffset: 1;
+	opacity: 0;
+}
+
+/* "show" keeps a line invisible until its own start: a round cap would
+   otherwise leave a dot where the pen has not been yet. */
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-pen {
+	animation:
+		brikpanel-cartab-draw var(--bp-cartab-dur, 0.6s) cubic-bezier(0.55, 0.1, 0.25, 1) var(--bp-cartab-dd, 0s) both,
+		brikpanel-cartab-show 1ms linear var(--bp-cartab-dd, 0s) both;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-pen.is-thin,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-line.is-thin {
+	stroke-width: 1.5px !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-line.is-grey,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-pen.is-grey {
+	stroke: #8a8a8a !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-pen.is-glyph {
+	stroke-width: 3.8px !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-pen.is-hatch {
+	stroke: #333333 !important;
+	stroke-width: 1.9px !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-pen.is-hatch.is-soft {
+	stroke: #6b6b6b !important;
+	stroke-width: 1.3px !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-shape {
+	stroke: none !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-shape.is-paper {
+	fill: #ffffff !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-shape.is-shade {
+	fill: #f2f2f2 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-shape.is-ink {
+	fill: #303030 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-shape.is-later,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-appear {
+	opacity: 0;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-shape.is-later,
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-appear {
+	animation: brikpanel-cartab-fade 0.55s ease var(--bp-cartab-dd, 0s) both;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-num,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-word,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-seal-text {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+	font-style: normal !important;
+	text-transform: none !important;
+	stroke: none !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-num {
+	font-weight: 700 !important;
+	letter-spacing: -0.03em !important;
+	fill: #303030 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-word {
+	font-weight: 650 !important;
+	letter-spacing: 0.14em !important;
+	fill: #616161 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-seal-text {
+	font-weight: 700 !important;
+	letter-spacing: normal !important;
+	fill: #ffffff !important;
+}
+
+/* Handwritten notes: HTML over the drawing, so a translation is measured and
+   fitted by the script, and written left to right like a pen would. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-note {
+	position: absolute !important;
+	display: block !important;
+	box-sizing: border-box !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	border: 0 !important;
+	background: none !important;
+	font-family: "BrikPanel Caveat", "Segoe Print", "Bradley Hand", cursive !important;
+	font-style: normal !important;
+	font-weight: 600 !important;
+	font-size: 20px;
+	font-size: max(15px, 6cqw);
+	line-height: 1.02 !important;
+	letter-spacing: normal !important;
+	text-transform: none !important;
+	text-align: start !important;
+	color: #303030 !important;
+	white-space: nowrap !important;
+	transform: rotate(var(--bp-cartab-rot, -4deg));
+	transform-origin: left center;
+	clip-path: inset(-20% 115% -20% -15%);
+	pointer-events: none !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-note.is-wrapped {
+	white-space: normal !important;
+	text-wrap: balance;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-note--word {
+	font-size: 30px;
+	font-size: max(20px, 9.3cqw);
+}
+
+/* A right-to-left note is written from its right edge. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-note:dir(rtl) {
+	clip-path: inset(-20% -15% -20% 115%);
+}
+
+/* The font did not arrive in time: stay in the fallback for good, so a late
+   swap cannot move a note away from its arrow. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-sketch.is-plain-hand .brikpanel-cartab-note {
+	font-family: "Segoe Print", "Bradley Hand", cursive !important;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-note {
+	animation: brikpanel-cartab-write var(--bp-cartab-dur, 0.7s) cubic-bezier(0.4, 0.1, 0.6, 1) var(--bp-cartab-dd, 0s) both;
+}
+
+/* Coupon: the scissors snip down the perforation, the stub comes away. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-lever {
+	transform-origin: 0 0;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-lever.is-a {
+	transform: rotate(10deg);
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-lever.is-b {
+	transform: rotate(-10deg);
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-stub {
+	transform-origin: 330px 108px;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-pen.is-cut {
+	animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95), linear;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-cut-move {
+	animation: brikpanel-cartab-cut-move 1.25s cubic-bezier(0.45, 0.05, 0.55, 0.95) 1.95s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-cut-out {
+	animation: brikpanel-cartab-cut-out 0.4s ease-in 3.22s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-lever.is-a {
+	animation: brikpanel-cartab-snip-a 0.25s ease-in-out 1.95s 5 both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-lever.is-b {
+	animation: brikpanel-cartab-snip-b 0.25s ease-in-out 1.95s 5 both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-stub {
+	animation: brikpanel-cartab-stub 0.75s cubic-bezier(0.3, 1.35, 0.5, 1) 3.15s both;
+}
+
+/* Envelope: the seal comes off, the flap folds over, the card rises. The
+   script sets the origins that depend on where the envelope sits. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-seal-in {
+	transform: scale(0);
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-flap,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-flap-open {
+	transform-origin: 0 58px;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-flap-open {
+	transform: scaleY(0);
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-seal-in {
+	animation: brikpanel-cartab-pop 0.4s cubic-bezier(0.3, 1.6, 0.5, 1) 1.3s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-seal-out {
+	animation: brikpanel-cartab-seal-out 0.3s ease-in 1.85s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-flap {
+	animation: brikpanel-cartab-flap-fold 0.26s cubic-bezier(0.55, 0, 0.8, 0.3) 2s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-flap-open {
+	animation: brikpanel-cartab-flap-open 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) 2.26s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-letter {
+	animation: brikpanel-cartab-letter 0.8s cubic-bezier(0.2, 0.9, 0.3, 1.1) 2.35s both;
+}
+
+/* Gift box: the lid is tossed aside and the tag comes out. */
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-lid {
+	animation: brikpanel-cartab-lid 0.62s cubic-bezier(0.3, 0.7, 0.4, 1) 1.75s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-tag {
+	animation: brikpanel-cartab-tag 0.75s cubic-bezier(0.2, 0.9, 0.3, 1.12) 1.9s both;
+}
+
+/* Eraser: the number shows, and the shading goes, exactly behind the eraser
+   (both clip edges and the eraser travel x 131 -> 331 in the same 1.2 s). */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-erase-num {
+	clip-path: inset(-10% 64% -10% -10%);
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-eraser-in,
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-crumb {
+	opacity: 0;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-crumb {
+	fill: none !important;
+	stroke: #8a8a8a !important;
+	stroke-width: 1.4px !important;
+	stroke-linecap: round !important;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-erase-num {
+	animation: brikpanel-cartab-erase-show 1.2s linear 1.8s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-erase-hatch {
+	animation: brikpanel-cartab-erase-wipe 1.2s linear 1.8s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-eraser-in {
+	animation: brikpanel-cartab-eraser-in 0.35s cubic-bezier(0.2, 0.8, 0.3, 1) 1.45s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-eraser-x {
+	animation: brikpanel-cartab-eraser-x 1.2s linear 1.8s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-eraser-y {
+	animation: brikpanel-cartab-eraser-y 0.2s ease-in-out 1.8s 6 alternate both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-eraser-out {
+	animation: brikpanel-cartab-eraser-out 0.35s ease-in 3.02s both;
+}
+
+.brikpanel-cartab-popup-overlay .is-drawing .brikpanel-cartab-crumb {
+	animation: brikpanel-cartab-crumb 1s ease-out var(--bp-cartab-dd, 0s) both;
+}
+
+/* After signing up: a pencil tick, and a frame drawn round the code. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-tick {
+	display: inline-block !important;
+	width: 16px !important;
+	height: 16px !important;
+	max-width: none !important;
+	margin: 0 !important;
+	margin-inline-end: 6px !important;
+	padding: 0 !important;
+	vertical-align: -3px !important;
+	overflow: visible !important;
+}
+
+/* Its place and size come from the script, measured round the chip. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-code-frame {
+	position: absolute !important;
+	display: block !important;
+	max-width: none !important;
+	max-height: none !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	overflow: visible !important;
+	pointer-events: none !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-code-frame.is-still .brikpanel-cartab-pen {
+	stroke-dashoffset: 0;
+	opacity: 1;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-code.has-frame {
+	border-color: transparent !important;
+}
+
+@keyframes brikpanel-cartab-draw {
+	to { stroke-dashoffset: 0; }
+}
+
+@keyframes brikpanel-cartab-show {
+	to { opacity: 1; }
+}
+
+@keyframes brikpanel-cartab-write {
+	to { clip-path: inset(-20% -15% -20% -15%); }
+}
+
+@keyframes brikpanel-cartab-pop {
+	from { transform: scale(0); }
+	to { transform: scale(1); }
+}
+
+@keyframes brikpanel-cartab-cut-move {
+	to { transform: translateY(59px); }
+}
+
+@keyframes brikpanel-cartab-cut-out {
+	to { opacity: 0; transform: translate(6px, 16px) rotate(10deg); }
+}
+
+@keyframes brikpanel-cartab-snip-a {
+	0%, 100% { transform: rotate(10deg); }
+	50% { transform: rotate(1deg); }
+}
+
+@keyframes brikpanel-cartab-snip-b {
+	0%, 100% { transform: rotate(-10deg); }
+	50% { transform: rotate(-1deg); }
+}
+
+@keyframes brikpanel-cartab-stub {
+	to { transform: translate(7px, 4px) rotate(6deg); }
+}
+
+@keyframes brikpanel-cartab-seal-out {
+	to { opacity: 0; transform: translateY(-10px) scale(1.5); }
+}
+
+@keyframes brikpanel-cartab-flap-fold {
+	to { transform: scaleY(0); }
+}
+
+@keyframes brikpanel-cartab-flap-open {
+	from { transform: scaleY(0); }
+	to { transform: scaleY(1); }
+}
+
+@keyframes brikpanel-cartab-letter {
+	to { transform: translateY(-60px) rotate(-2.5deg); }
+}
+
+@keyframes brikpanel-cartab-lid {
+	0% { transform: none; }
+	40% { transform: translate(-22px, -30px) rotate(-14deg); }
+	100% { transform: translate(-50px, -12px) rotate(-26deg); }
+}
+
+@keyframes brikpanel-cartab-tag {
+	to { transform: translateY(-62px) rotate(5deg); }
+}
+
+@keyframes brikpanel-cartab-erase-show {
+	from { clip-path: inset(-10% 64% -10% -10%); }
+	to { clip-path: inset(-10% 9% -10% -10%); }
+}
+
+@keyframes brikpanel-cartab-erase-wipe {
+	from { clip-path: inset(-10% -10% -10% 36%); }
+	to { clip-path: inset(-10% -10% -10% 91%); }
+}
+
+@keyframes brikpanel-cartab-eraser-in {
+	from { opacity: 0; transform: translate(-26px, -30px) rotate(-20deg); }
+	to { opacity: 1; transform: none; }
+}
+
+@keyframes brikpanel-cartab-eraser-x {
+	to { transform: translateX(200px); }
+}
+
+@keyframes brikpanel-cartab-eraser-y {
+	from { transform: translateY(-19px); }
+	to { transform: translateY(19px); }
+}
+
+@keyframes brikpanel-cartab-eraser-out {
+	to { opacity: 0; transform: translate(22px, -26px) rotate(18deg); }
+}
+
+@keyframes brikpanel-cartab-crumb {
+	0% { opacity: 0; transform: translateY(-4px); }
+	20% { opacity: 1; }
+	70% { opacity: 0.8; }
+	100% { opacity: 0; transform: translateY(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	/* Every drawing shows finished: duration 0 with fill both lands on the
+	   last frame. */
+	.brikpanel-cartab-popup-overlay .brikpanel-cartab-sketch *,
+	.brikpanel-cartab-popup-overlay .brikpanel-cartab-tick *,
+	.brikpanel-cartab-popup-overlay .brikpanel-cartab-code-frame * {
+		animation-duration: 0s !important;
+		animation-delay: 0s !important;
+	}
+
+	.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-title,
+	.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-message,
+	.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup-form,
+	.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon,
+	.brikpanel-cartab-teaser .brikpanel-cartab-teaser-ticket {
+		animation: none !important;
+	}
+}
+
+/* ==========================================================================
+ * Success state — coupon code reveal.
+ * ========================================================================== */
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon {
+	margin-top: 14px !important;
+	animation: brikpanel-cartab-fade 0.35s ease both;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-intro {
+	font-size: 12px !important;
+	font-weight: 600 !important;
+	text-transform: uppercase !important;
+	letter-spacing: 0.08em !important;
+	color: #616161 !important;
+	margin-bottom: 6px !important;
+}
+
+/* Wraps because the merchant chooses how a code starts: a long start with
+ * the copy button beside it is wider than a phone, so the button drops
+ * below and a code too long for one line breaks inside the box. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-row {
+	display: flex !important;
+	flex-wrap: wrap !important;
+	align-items: stretch !important;
+	justify-content: center !important;
+	gap: 8px !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-code {
+	position: relative !important;
+	display: inline-flex !important;
+	align-items: center !important;
+	max-width: 100% !important;
+	overflow-wrap: anywhere !important;
+	padding: 8px 14px !important;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+	font-size: 16px !important;
+	font-weight: 700 !important;
+	letter-spacing: 0.06em !important;
+	color: #303030 !important;
+	background: #fafafa !important;
+	border: 1.5px dashed #8a8a8a !important;
+	border-radius: 8px !important;
+	user-select: all;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-copy {
+	padding: 8px 14px !important;
+	min-height: 0 !important;
+	font-size: 13px !important;
+	font-weight: 550 !important;
+	color: #ffffff !important;
+	background: #303030 !important;
+	border: 0 !important;
+	border-radius: 8px !important;
+	cursor: pointer !important;
+	text-transform: none !important;
+	box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+	transition: background 0.15s ease;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-copy:hover {
+	background: #1a1a1a !important;
+	color: #ffffff !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-copy.is-copied {
+	background: #1a8917 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-hint {
+	margin-top: 8px !important;
+	font-size: 12px !important;
+	color: #616161 !important;
+}
+
+/* The code's minimum spend, right under the code: a condition of the code
+ * itself, so it reads a step stronger than the notes around it. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-minimum {
+	margin-top: 8px !important;
+	font-size: 13px !important;
+	font-weight: 600 !important;
+	line-height: 1.4 !important;
+	color: #303030 !important;
+}
+
+/* "Wrong address? Edit it" affordance under the emailed-coupon notice. */
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail {
+	margin-top: 10px !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-toggle {
+	padding: 0 !important;
+	min-height: 0 !important;
+	font-size: 12px !important;
+	font-weight: 550 !important;
+	color: #616161 !important;
+	background: none !important;
+	border: 0 !important;
+	text-decoration: underline !important;
+	text-underline-offset: 2px !important;
+	cursor: pointer !important;
+	text-transform: none !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-toggle:hover {
+	color: #303030 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-toggle:disabled {
+	color: #1a8917 !important;
+	text-decoration: none !important;
+	cursor: default !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-form {
+	display: flex !important;
+	align-items: stretch !important;
+	gap: 8px !important;
+	margin: 0 !important;
+	flex-wrap: wrap !important;
+	justify-content: center !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-form[hidden] {
+	display: none !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-input {
+	flex: 1 1 192px !important;
+	min-width: 0 !important;
+	padding: 8px 12px !important;
+	font-size: 14px !important;
+	color: #303030 !important;
+	background: #ffffff !important;
+	border: 1px solid #8a8a8a !important;
+	border-radius: 8px !important;
+	box-shadow: none !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-input:focus {
+	outline: 0 !important;
+	border-color: #303030 !important;
+	box-shadow: 0 0 0 1px #303030 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-save {
+	padding: 8px 14px !important;
+	min-height: 0 !important;
+	font-size: 13px !important;
+	font-weight: 550 !important;
+	color: #ffffff !important;
+	background: #303030 !important;
+	border: 0 !important;
+	border-radius: 8px !important;
+	cursor: pointer !important;
+	text-transform: none !important;
+	box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+	transition: background 0.15s ease;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-save:hover {
+	background: #1a1a1a !important;
+	color: #ffffff !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-save:disabled {
+	opacity: 0.6 !important;
+	cursor: default !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-cancel {
+	padding: 8px 14px !important;
+	min-height: 0 !important;
+	font-size: 13px !important;
+	font-weight: 550 !important;
+	color: #303030 !important;
+	background: #ffffff !important;
+	border: 0 !important;
+	border-radius: 8px !important;
+	cursor: pointer !important;
+	text-transform: none !important;
+	box-shadow: inset 0 0 0 1px #e3e3e3, 0 1px 0 rgba(0, 0, 0, 0.05) !important;
+	transition: background 0.15s ease;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-cancel:hover {
+	background: #f7f7f7 !important;
+	color: #303030 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-note {
+	margin-top: 6px !important;
+	font-size: 12px !important;
+	color: #616161 !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-editmail-note.is-error {
+	color: #d72c0d !important;
+}
+
+/* ==========================================================================
+ * Floating tab (teaser) — bottom-left, Klaviyo-style.
+ * ========================================================================== */
+
+.brikpanel-cartab-teaser {
+	position: fixed !important;
+	left: 16px !important;
+	bottom: 16px !important;
+	z-index: 999998 !important;
+	transform: translateX(-120%);
+	transition: transform 0.35s cubic-bezier(0.34, 1.3, 0.64, 1);
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+}
+
+.brikpanel-cartab-teaser.is-in {
+	transform: translateX(0);
+}
+
+.brikpanel-cartab-teaser .brikpanel-cartab-teaser-btn {
+	display: inline-flex !important;
+	align-items: center !important;
+	gap: 8px !important;
+	padding: 10px 16px !important;
+	min-height: 0 !important;
+	background: #303030 !important;
+	color: #ffffff !important;
+	border: 0 !important;
+	border-radius: 999px !important;
+	font-size: 13px !important;
+	font-weight: 600 !important;
+	line-height: 1.3 !important;
+	letter-spacing: normal !important;
+	text-transform: none !important;
+	cursor: pointer !important;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.12) !important;
+	transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.brikpanel-cartab-teaser .brikpanel-cartab-teaser-btn:hover {
+	background: #1a1a1a !important;
+	color: #ffffff !important;
+	transform: translateY(-2px);
+}
+
+.brikpanel-cartab-teaser .brikpanel-cartab-teaser-ticket {
+	display: inline-flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	width: 20px !important;
+	height: 20px !important;
+	background: #ffffff !important;
+	color: #303030 !important;
+	border-radius: 50% !important;
+	font-size: 12px !important;
+	font-weight: 700 !important;
+	animation: brikpanel-cartab-teaser-wiggle 3s ease-in-out infinite;
+}
+
+@keyframes brikpanel-cartab-teaser-wiggle {
+	0%, 84%, 100% { transform: rotate(0deg); }
+	88% { transform: rotate(-12deg); }
+	92% { transform: rotate(10deg); }
+	96% { transform: rotate(-6deg); }
+}
+
+.brikpanel-cartab-teaser .brikpanel-cartab-teaser-close {
+	position: absolute !important;
+	top: -7px !important;
+	right: -7px !important;
+	width: 20px !important;
+	height: 20px !important;
+	min-height: 0 !important;
+	display: inline-flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	padding: 0 !important;
+	background: #ffffff !important;
+	color: #616161 !important;
+	border: 1px solid #e3e3e3 !important;
+	border-radius: 50% !important;
+	font-size: 13px !important;
+	line-height: 1 !important;
+	cursor: pointer !important;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18) !important;
+	opacity: 0;
+	transform: scale(0.7);
+	transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease;
+}
+
+.brikpanel-cartab-teaser:hover .brikpanel-cartab-teaser-close,
+.brikpanel-cartab-teaser .brikpanel-cartab-teaser-close:focus {
+	opacity: 1;
+	transform: scale(1);
+}
+
+.brikpanel-cartab-teaser .brikpanel-cartab-teaser-close:hover {
+	color: #d72c0d !important;
+}
+
+/* Phones and tablets have no hover, so the X above never appeared there and the
+ * tab could not be put away. Show it, a little larger, with a fingertip-sized
+ * area around it that still closes the tab. */
+@media (hover: none) {
+	.brikpanel-cartab-teaser .brikpanel-cartab-teaser-close {
+		top: -9px !important;
+		right: -9px !important;
+		width: 24px !important;
+		height: 24px !important;
+		font-size: 15px !important;
+		opacity: 1;
+		transform: scale(1);
+	}
+
+	.brikpanel-cartab-teaser .brikpanel-cartab-teaser-close::before {
+		content: "" !important;
+		position: absolute !important;
+		inset: -8px !important;
+	}
+}
+
+/* ==========================================================================
+ * Saved code: the tab in "you already have a code" mode, and the small panel
+ * it reopens. The signup card sells; these two only hand something back, so
+ * they are quieter than the invitation in every respect.
+ * ========================================================================== */
+
+/* The wiggle is an attention-getter for an offer not yet taken. A code the
+ * visitor already owns has no reason to fidget. */
+.brikpanel-cartab-teaser.is-coupon .brikpanel-cartab-teaser-ticket {
+	animation: none !important;
+}
+
+/* Echoes the code chip's typeface so the tab reads as "your code" at a glance. */
+.brikpanel-cartab-teaser.is-coupon .brikpanel-cartab-teaser-label {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+	letter-spacing: 0.04em !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup--code {
+	max-width: 380px !important;
+	padding: 32px 24px 24px !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup--code .brikpanel-cartab-popup-title {
+	font-size: 16px !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-popup--code .brikpanel-cartab-coupon {
+	margin-top: 16px !important;
+}
+
+.brikpanel-cartab-popup-overlay .brikpanel-cartab-coupon-saved {
+	margin-top: 6px !important;
+	font-size: 12px !important;
+	color: #616161 !important;
+}
+
+/* Collapse: the card flies into the tab it is about to become, so the visitor
+ * sees where their code went instead of watching it vanish. */
+.brikpanel-cartab-popup-overlay.is-collapsing {
+	opacity: 1;
+	background: rgba(20, 20, 20, 0) !important;
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+	transition: background-color 0.3s ease;
+}
+
+.brikpanel-cartab-popup-overlay.is-collapsing .brikpanel-cartab-popup {
+	transform-origin: bottom left;
+	animation: brikpanel-cartab-collapse 0.4s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes brikpanel-cartab-collapse {
+	to {
+		transform: translate(-18vw, 34vh) scale(0.2);
+		opacity: 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.brikpanel-cartab-popup-overlay.is-collapsing .brikpanel-cartab-popup {
+		animation: none !important;
+		opacity: 0;
+		transition: opacity 0.25s ease;
+	}
+}
+
+/* ==========================================================================
+ * `hidden` must hide inside the popup, whatever the theme says.
+ * ========================================================================== */
+
+/* The browser applies [hidden] through its own stylesheet, and any `display`
+ * a stylesheet sets beats it. Themes give every button one (WoodMart
+ * inline-flex, Hello Elementor inline-block), so the "Wrong address? Edit it"
+ * link stayed on screen above its own open edit form. !important and the extra
+ * :not() weight keep this above every rule in this file (they are all
+ * `.brikpanel-cartab-popup-overlay .x { … !important }`) and above theme rules.
+ * It is last in the file so a later rule of the same weight cannot undo it.
+ * `until-found` is left to the browser, which reveals it on find-in-page. */
+.brikpanel-cartab-popup-overlay [hidden]:not([hidden="until-found"]) {
+	display: none !important;
+}

@@ -1,0 +1,634 @@
+/* =========================================================================
+   BrikPanel — Google Sheets settings page
+   Scoped under .bp-gs to avoid bleeding into wp-admin chrome.
+   Design tokens follow CLAUDE.md (Shopify-admin-inspired monochrome).
+   ========================================================================= */
+
+.brikpanel-gs-wrap {
+	background: #f1f1f1;
+	margin: 0;
+	padding: 0;
+	min-height: calc(100vh - 32px);
+}
+
+/* Width, gutters and top spacing: the narrow page shell
+   (front-end/shared/brikpanel-ui.css, `brikpanel-shell__page`). */
+.bp-gs {
+	padding-bottom: 4rem;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+	color: #303030;
+	line-height: 1.5;
+}
+
+/* `hidden` must hide on this page. The browser applies [hidden] through its
+   own stylesheet, and any `display` a class sets beats that: the orders scope
+   hint is flex, so when its count request failed it stayed on screen as a
+   bordered box stuck on "Counting…". Not !important: WordPress moves other
+   plugins' notices under the page title, into .bp-gs, and some reveal their
+   parts with an inline style. */
+.bp-gs [hidden]:not([hidden="until-found"]) {
+	display: none;
+}
+
+/* ----- HEADER ----- */
+/* The title keeps a real column: when the status pill (the connected account's
+   email) does not fit beside it, the pill moves under it instead of squeezing
+   the title to one word per line (field test B10). */
+.bp-gs-header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	margin: 0 0 1rem;
+	gap: 0.5rem 1rem;
+}
+
+.bp-gs-header-left { flex: 1 1 16rem; min-width: 0; }
+.bp-gs-header-right { min-width: 0; max-width: 100%; }
+.bp-gs-header-left h1 {
+	margin: 0 0 0.25rem;
+	font-size: var(--brikpanel-title-size, 1.125rem);
+	font-weight: var(--brikpanel-title-weight, 600);
+	line-height: var(--brikpanel-title-line, 1.3);
+	padding: 0;
+	color: #303030;
+}
+.bp-gs-subtitle {
+	margin: 0;
+	color: #616161;
+	font-size: 0.875rem;
+}
+
+.bp-gs-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.25rem 0.625rem;
+	background: #fff;
+	border: 1px solid #e3e3e3;
+	border-radius: 999px;
+	font-size: 0.75rem;
+	font-weight: 550;
+	color: #303030;
+	box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+	max-width: 100%;
+	box-sizing: border-box;
+}
+.bp-gs-pill-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.bp-gs-pill[data-state="live"]    .bp-gs-pill-dot { background: #1a8917; }
+.bp-gs-pill[data-state="off"]     .bp-gs-pill-dot { background: #8a8a8a; }
+.bp-gs-pill[data-state="error"]   .bp-gs-pill-dot { background: #d72c0d; }
+.bp-gs-pill[data-state="refresh"] .bp-gs-pill-dot { background: #d2c11d; animation: bp-gs-pulse 1.2s ease-in-out infinite; }
+.bp-gs-pill-dot {
+	flex-shrink: 0;
+	width: 8px;
+	height: 8px;
+	border-radius: 999px;
+}
+@keyframes bp-gs-pulse {
+	0%, 100% { opacity: 1; }
+	50%      { opacity: 0.35; }
+}
+
+/* ----- TOAST ----- */
+.bp-gs-toast {
+	position: fixed;
+	top: 44px;
+	right: 20px;
+	z-index: 9999;
+	min-width: 240px;
+	max-width: 360px;
+	padding: 0.625rem 0.875rem;
+	border-radius: 0.5rem;
+	font-size: 0.8125rem;
+	font-weight: 550;
+	transform: translateX(110%);
+	transition: transform 0.3s cubic-bezier(.4,0,.2,1);
+	box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+.bp-gs-toast.is-visible { transform: translateX(0); }
+.bp-gs-toast[data-tone="success"] { background: #e4f5e1; color: #1a6b15; border: 1px solid #b7e1b0; }
+.bp-gs-toast[data-tone="error"]   { background: #fce4e4; color: #c62828; border: 1px solid #f1b0b0; }
+.bp-gs-toast[data-tone="info"]    { background: #fff;     color: #303030; border: 1px solid #e3e3e3; }
+
+/* ----- TABS -----
+   One line that scrolls inside itself (data-bp-strip, shared strip helper):
+   on a phone the six tabs used to push the whole page sideways (field test
+   C3). The base line is an inset shadow, not a border the tabs overlap with a
+   -1px margin: a scrolling box would cut that overlap off. */
+.bp-gs-tabs {
+	display: flex;
+	gap: 0.25rem;
+	margin: 0 0 1rem;
+	padding: 0;
+	box-shadow: inset 0 -1px 0 #e3e3e3;
+}
+.bp-gs-tab {
+	appearance: none;
+	background: transparent;
+	border: 0;
+	padding: 0.5rem 0.75rem;
+	font: inherit;
+	font-size: 0.8125rem;
+	font-weight: 550;
+	color: #616161;
+	cursor: pointer;
+	border-bottom: 2px solid transparent;
+	white-space: nowrap;
+	transition: color 0.15s ease, border-color 0.15s ease;
+}
+.bp-gs-tab:hover { color: #303030; }
+.bp-gs-tab.is-active {
+	color: #303030;
+	border-bottom-color: #303030;
+}
+
+.bp-gs-tabpanel { display: none; }
+.bp-gs-tabpanel.is-active { display: block; }
+
+/* ----- CARDS ----- */
+.bp-gs-card {
+	background: #fff;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.75rem;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+	margin: 0 0 1rem;
+	overflow: hidden;
+}
+.bp-gs-card-body {
+	padding: 1.25rem 1.5rem;
+}
+.bp-gs-card h2 {
+	margin: 0 0 0.25rem;
+	font-size: var(--brikpanel-card-title-size, 0.9375rem);
+	font-weight: var(--brikpanel-card-title-weight, 600);
+	color: #303030;
+}
+.bp-gs-card-sub {
+	margin: 0 0 1rem;
+	color: #616161;
+	font-size: 0.8125rem;
+}
+.bp-gs-help {
+	margin: 0.25rem 0 0.625rem;
+	color: #616161;
+	font-size: 0.75rem;
+	line-height: 1.5;
+}
+.bp-gs-callout {
+	margin: 0 0 1rem;
+	padding: 0.625rem 0.75rem;
+	border-radius: 0.5rem;
+	font-size: 0.8125rem;
+	line-height: 1.5;
+	background: #fce4e4;
+	color: #c62828;
+	border: 1px solid #f1b0b0;
+}
+.bp-gs-callout strong { font-weight: 600; }
+/* Connect error box (views/page.php): what went wrong, why, what to do next,
+   and the raw detail a merchant can forward to their host. It stays until the
+   next click, where the toast it replaced was gone in 3.5 s. */
+.bp-gs-connect-error {
+	margin-block: 1rem 0;
+}
+.bp-gs-connect-error-help,
+.bp-gs-connect-error-detail {
+	display: block;
+	margin-block-start: 0.375rem;
+}
+.bp-gs-connect-error-detail {
+	font-size: 0.75rem;
+	color: #616161;
+	overflow-wrap: anywhere;
+}
+.bp-gs-connect-error-detail code {
+	margin: 0;
+	padding: 0;
+	background: none;
+	/* Monospace glyphs read a size larger than the label beside them. */
+	font-size: 0.92em;
+	color: inherit;
+	user-select: all;
+}
+/* "Connecting to Google…" / "Still trying…" beside the button while it works. */
+.bp-gs-connect-status {
+	align-self: center;
+	font-size: 0.8125rem;
+	color: #616161;
+}
+.bp-gs-section-divider {
+	margin: 1rem 0;
+	height: 1px;
+	background: #e3e3e3;
+}
+
+/* ----- LABEL / FIELDS ----- */
+.bp-gs-label {
+	display: block;
+	font-size: 0.8125rem;
+	font-weight: 600;
+	color: #303030;
+	margin-bottom: 0.375rem;
+}
+.bp-gs-field { margin: 0 0 0.75rem; }
+.bp-gs-field:last-of-type { margin-bottom: 0; }
+.bp-gs-field-group { margin: 0 0 1rem; }
+.bp-gs-field-toggle {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 0.5rem 0;
+}
+.bp-gs-field-toggle .bp-gs-label { margin-bottom: 0; }
+
+/* ----- INPUT ----- */
+/* The boxes are the shared .brikpanel-control (front-end/shared/brikpanel-ui.css),
+   error state included; a single-class rule here lost to WordPress 7.1. */
+.bp-gs-input {
+	width: 100%;
+}
+.bp-gs-input-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: stretch;
+}
+/* min-width 0: a text input keeps its default width otherwise, and the button
+   beside it was pushed past the card on a phone. */
+.bp-gs-input-row .bp-gs-input { flex: 1 1 12rem; min-width: 0; }
+
+/* ----- BUTTONS ----- */
+.bp-gs-actions {
+	display: flex;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+	margin-top: 1rem;
+}
+.bp-gs-btn {
+	appearance: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.375rem;
+	padding: 0.5rem 1rem;
+	font: inherit;
+	font-size: 0.8125rem;
+	font-weight: 550;
+	border-radius: 0.5rem;
+	cursor: pointer;
+	border: 0;
+	line-height: 1.2;
+	transition: background 0.15s ease, transform 0.05s ease, box-shadow 0.15s ease;
+	white-space: nowrap;
+}
+.bp-gs-btn:active { transform: translateY(1px); }
+.bp-gs-btn:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
+
+.bp-gs-spinner {
+	display: inline-block;
+	width: 12px;
+	height: 12px;
+	border: 1.5px solid currentColor;
+	border-right-color: transparent;
+	border-radius: 50%;
+	animation: bp-gs-spin 0.7s linear infinite;
+	vertical-align: -2px;
+	margin-right: 0.125rem;
+}
+@keyframes bp-gs-spin {
+	to { transform: rotate(360deg); }
+}
+
+.bp-gs-btn-primary {
+	background: #303030;
+	color: #fff;
+	box-shadow: inset 0 -1px 0 rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+.bp-gs-btn-primary:hover:not(:disabled) { background: #1a1a1a; }
+
+.bp-gs-btn-secondary {
+	background: #fff;
+	color: #303030;
+	box-shadow: inset 0 0 0 1px #e3e3e3, 0 1px 0 rgba(0,0,0,0.05);
+}
+.bp-gs-btn-secondary:hover:not(:disabled) { background: #f7f7f7; }
+
+.bp-gs-btn-link {
+	background: transparent;
+	color: #303030;
+	padding: 0.5rem 0;
+	font-weight: 550;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	border-radius: 0;
+}
+.bp-gs-btn-link:hover { color: #1a1a1a; }
+
+/* ----- TOGGLE SWITCH ----- */
+.bp-gs-toggle {
+	position: relative;
+	display: inline-block;
+	width: 40px;
+	height: 22px;
+	flex: 0 0 auto;
+}
+.bp-gs-toggle input { display: none; }
+.bp-gs-toggle-slider {
+	position: absolute;
+	inset: 0;
+	background: #ccc;
+	border-radius: 22px;
+	transition: background 0.15s ease;
+	cursor: pointer;
+}
+.bp-gs-toggle-slider::before {
+	content: "";
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	width: 16px;
+	height: 16px;
+	background: #fff;
+	border-radius: 999px;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+	transition: transform 0.15s ease;
+}
+.bp-gs-toggle input:checked + .bp-gs-toggle-slider { background: #303030; }
+.bp-gs-toggle input:checked + .bp-gs-toggle-slider::before { transform: translateX(18px); }
+
+/* ----- RADIO / CHECKBOX rows ----- */
+.bp-gs-radio-row,
+.bp-gs-checkbox-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem 1rem;
+}
+.bp-gs-radio,
+.bp-gs-checkbox {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-size: 0.8125rem;
+	cursor: pointer;
+}
+.bp-gs-radio input,
+.bp-gs-checkbox input {
+	accent-color: #303030;
+	margin: 0;
+}
+
+/* ----- CATEGORY FILTER LIST ----- */
+.bp-gs-cat-list {
+	margin: 0.375rem 0 0.5rem;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.5rem;
+	background: #fafafa;
+	max-height: 240px;
+	overflow-y: auto;
+}
+.bp-gs-cat-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid #efefef;
+	cursor: pointer;
+	font-size: 0.8125rem;
+}
+.bp-gs-cat-item:last-child { border-bottom: 0; }
+.bp-gs-cat-item:hover { background: #f3f3f3; }
+.bp-gs-cat-count {
+	color: #616161;
+	font-size: 0.75rem;
+	font-variant-numeric: tabular-nums;
+}
+
+/* ----- COLUMN MAPPER ----- */
+.bp-gs-column-list {
+	list-style: none;
+	margin: 0 0 0.75rem;
+	padding: 0;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.5rem;
+	background: #fafafa;
+	max-height: 320px;
+	overflow-y: auto;
+}
+.bp-gs-column-item {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 0.5rem;
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid #efefef;
+}
+.bp-gs-column-item:last-child { border-bottom: 0; }
+.bp-gs-column-item.is-mandatory .bp-gs-checkbox { color: #616161; }
+.bp-gs-column-grouplabel {
+	padding: 0.5rem 0.75rem 0.375rem;
+	margin-top: 0.25rem;
+	border-top: 1px solid #e3e3e3;
+	border-bottom: 1px solid #efefef;
+	font-size: 0.75rem;
+	font-weight: 600;
+	letter-spacing: normal;
+	text-transform: none;
+	color: #616161;
+	background: #fafafa;
+}
+.bp-gs-column-actions { display: flex; gap: 0.25rem; margin-left: auto; }
+.bp-gs-col-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: 0.0625rem 0.375rem;
+	font-size: 0.6875rem;
+	font-weight: 550;
+	line-height: 1.5;
+	color: #303030;
+	background: #f1f1f1;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.375rem;
+	white-space: nowrap;
+}
+.bp-gs-twoway-note {
+	margin: 0 0 0.875rem;
+	padding: 0.75rem 0.875rem;
+	background: #fafafa;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.5rem;
+}
+.bp-gs-twoway-note-title {
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+	font-size: 0.8125rem;
+	font-weight: 600;
+	color: #303030;
+}
+.bp-gs-twoway-note p {
+	margin: 0.375rem 0 0;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	color: #616161;
+}
+.bp-gs-twoway-note .bp-gs-col-badge { font-weight: 600; }
+.bp-gs-scope {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	margin: 0.625rem 0 0;
+	padding: 0.625rem 0.75rem;
+	background: #fafafa;
+	border: 1px solid #e3e3e3;
+	border-left: 3px solid #8a8a8a;
+	border-radius: 0.5rem;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	color: #616161;
+}
+.bp-gs-scope[data-tone="warn"] {
+	background: #fdf6e3;
+	border-color: #e8d9a8;
+	border-left-color: #b8860b;
+}
+.bp-gs-scope-count { font-weight: 600; color: #303030; }
+.bp-gs-scope-warn:empty { display: none; }
+.bp-gs-twoway-note p.bp-gs-twoway-note-off {
+	margin-top: 0.5rem;
+	padding-top: 0.5rem;
+	border-top: 1px solid #e3e3e3;
+	color: #303030;
+	font-weight: 550;
+}
+.bp-gs-icon-btn {
+	appearance: none;
+	border: 1px solid #e3e3e3;
+	background: #fff;
+	border-radius: 0.375rem;
+	padding: 0.125rem 0.5rem;
+	font-size: 0.75rem;
+	cursor: pointer;
+	color: #303030;
+}
+.bp-gs-icon-btn:hover { background: #f7f7f7; }
+.bp-gs-column-extras { margin: 0 0 0.5rem; }
+.bp-gs-column-extras summary {
+	cursor: pointer;
+	font-size: 0.8125rem;
+	font-weight: 550;
+	color: #616161;
+	padding: 0.25rem 0;
+}
+.bp-gs-column-extras summary:hover { color: #303030; }
+
+/* ----- SCOPE LIST ----- */
+/* Bullets, indent and item spacing: the shared list (.brikpanel-bullets in
+   front-end/shared/brikpanel-ui.css). WordPress removes list markers, so this
+   list read as indented sentences with no bullet (field test D11). */
+.bp-gs-scope-list {
+	margin: 0.75rem 0 1rem;
+	color: #616161;
+	font-size: 0.8125rem;
+}
+
+/* ----- DEFINITION LIST ----- */
+.bp-gs-dl {
+	margin: 0.5rem 0 0;
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 0.375rem 1rem;
+	font-size: 0.8125rem;
+}
+.bp-gs-dl dt { color: #616161; font-weight: 550; }
+.bp-gs-dl dd { margin: 0; color: #303030; }
+
+/* ----- CURRENT-SHEET BANNER ----- */
+.bp-gs-current-sheet {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	margin: 0 0 1rem;
+	padding: 0.75rem 1rem;
+	background: #f7f7f7;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.5rem;
+}
+.bp-gs-current-sheet-title {
+	font-weight: 600;
+	color: #303030;
+	font-size: 0.875rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.bp-gs-link {
+	color: #303030;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	font-size: 0.8125rem;
+	font-weight: 550;
+}
+.bp-gs-link:hover { color: #1a1a1a; }
+
+/* ----- DIVIDER ----- */
+.bp-gs-divider {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	margin: 1rem 0;
+	color: #616161;
+	font-size: 0.75rem;
+	text-transform: none;
+	letter-spacing: normal;
+}
+.bp-gs-divider::before,
+.bp-gs-divider::after {
+	content: "";
+	flex: 1 1 auto;
+	height: 1px;
+	background: #e3e3e3;
+}
+
+/* ----- INFO LIST ----- */
+/* Bullets: the shared list (.brikpanel-bullets), see the scope list above. */
+.bp-gs-info-list {
+	margin: 0.5rem 0 1rem;
+	font-size: 0.8125rem;
+	color: #616161;
+}
+.bp-gs-info-list strong { color: #303030; font-weight: 600; }
+
+/* ----- LOG TABLE ----- */
+.bp-gs-log {
+	margin-top: 0.75rem;
+	padding: 0.75rem;
+	background: #fafafa;
+	border: 1px solid #e3e3e3;
+	border-radius: 0.5rem;
+	font-size: 0.75rem;
+	max-height: 240px;
+	overflow-y: auto;
+}
+.bp-gs-log table { width: 100%; border-collapse: collapse; }
+.bp-gs-log th, .bp-gs-log td {
+	text-align: left;
+	padding: 0.25rem 0.5rem;
+	border-bottom: 1px solid #efefef;
+	vertical-align: top;
+}
+.bp-gs-log th { color: #616161; font-weight: 600; }
+.bp-gs-log .bp-gs-log-empty {
+	color: #616161;
+	padding: 0.5rem;
+	text-align: center;
+}

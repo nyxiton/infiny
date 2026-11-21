@@ -1,0 +1,1072 @@
+<?php
+
+namespace UkrSolution\BarcodeScanner\features\settings;
+
+use UkrSolution\BarcodeScanner\API\actions\ManagementActions;
+use UkrSolution\BarcodeScanner\API\classes\SearchFilter;
+use UkrSolution\BarcodeScanner\API\classes\WPML;
+use UkrSolution\BarcodeScanner\Database;
+use UkrSolution\BarcodeScanner\features\cart\Cart;
+use UkrSolution\BarcodeScanner\features\interfaceData\InterfaceData;
+use UkrSolution\BarcodeScanner\features\locations\Locations;
+use UkrSolution\BarcodeScanner\features\locations\LocationsData;
+use UkrSolution\BarcodeScanner\features\mobile\MobileRouter;
+use WP_REST_Request;
+
+class Settings
+{
+    private $coreInstance = null;
+    private $post = array();
+    private $frontendPermissions = array();
+    private $dbOptionSettingsKey = "barcode-scanner-settings-options";
+    private $dbOptionRolesPermissionsKey = "barcode-scanner-roles-permissions";
+    private $rolesPermissions = array();
+    private $userPermissionKey = "barcode-scanner-permission";
+    private $dbOptionPluginsKey = "barcode-scanner-plugins";
+    private $plugins = array();
+    public $userAppPermissionKey = "scanner-app-token";
+    public $activeTab = "";
+
+    public function __construct($coreInstance = null)
+    {
+        $this->coreInstance = $coreInstance;
+    }
+
+    public function formSubmitted()
+    {
+        $this->formListener();
+    }
+
+    public function restoreSettings()
+    {
+    }
+
+    public function updateSettings($key, $value, $type = "json")
+    {
+        global $wpdb;
+
+        // @codingStandardsIgnoreStart
+        $row = $wpdb->get_row($wpdb->prepare("SELECT S.id FROM {$wpdb->prefix}barcode_scanner_settings AS S WHERE S.field_name = '%s' LIMIT 1;", $key));
+
+        if ($row) {
+            $wpdb->update($wpdb->prefix . Database::$settings, array("value" => $value, "type" => $type), array("id" => $row->id));
+        } else {
+            $wpdb->insert($wpdb->prefix . Database::$settings, array("field_name" => $key, "value" => $value, "type" => $type), array('%s', '%s', '%s'));
+        }
+        // @codingStandardsIgnoreEnd
+
+        $row = null;
+    }
+
+    public function getSettings($key = "", $asArray = false, $reSelectData = false)
+    {
+        return SettingsHelper::getSettingsField($this, $key, $asArray, $reSelectData);
+    }
+
+    public function formListener()
+    {
+        try {
+            $nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+
+            if ($nonce && !wp_verify_nonce($nonce, USBS_PLUGIN_BASE_NAME . "-settings")) {
+                return;
+            }
+
+            if (isset($_POST) && !empty($_POST)) {
+                $keys = array(
+                    'tab',
+                    'key',
+                    'defaultOrderStatus',
+                    'defaultShippingMethod',
+                    'fieldForNewProduct',
+                    'cfForNewProduct',
+                    'wpmlUpdateProductsTree',
+                    'orderCreateEmail',
+                    'allowToUseOnFrontend',
+                    'frontendIntegration',
+                    'allowFrontendShortcodes',
+                    'allowNegativeStock',
+                    'indexationStep',
+                    'searchResultsLimit',
+                    'debugInfo',
+                    'disabledIndexation',
+                    'searchCF',
+                    'searchCFLabel',
+                    'newProductQty',
+                    'newProductStatus',
+                    'directDbUpdate',
+                    'directDbSearch',
+                    'customCss',
+                    'customCssMobile',
+                    'show_price_1',
+                    'show_price_2',
+                    'show_price_3',
+                    'price_1_label',
+                    'price_2_label',
+                    'price_3_label',
+                    'cartDecimalQuantity',
+                    'priceFieldPriority',
+                    'sendAdminEmailCreatedOrder',
+                    'sendClientEmailCreatedOrder',
+                    'price_1_field',
+                    'price_2_field',
+                    'price_3_field',
+                    'productStatuses',
+                    'orderStatuses',
+                    'productsCatalogVisibility',
+                    'displayPayButton',
+                    'autoGenInvoice',
+                    'orderStatusesAreStillNotCompleted',
+                    'addAppUsersPermissions',
+                    'removeAppUsersPermissions',
+                    'storage',
+                    'locations',
+                    'enableLocations',
+                    'fields',
+                    'newOrderUserRequired',
+                    'fulfillmentScanItemQty',
+                    'notifyUsersStock',
+                    'nowOrderDefaultUser',
+                    'displaySearchCounter',
+                    'openOrderAfterCreation',
+                    'shippingRequired',
+                    'paymentRequired',
+                    'orderFulfillmentEnabled',
+                    'orderFulFillmentField',
+                    'ffQtyStep',
+                    'cartQtyStep',
+                    'receipt-width',
+                    'receipt-template',
+                    'modifyPreProcessSearchString',
+                    'afterSearchJavaScript',
+                    'receiptOrderPreview',
+                    'autoStatusFulfilled',
+                    'delayBetweenScanning',
+                    'displayCouponField',
+                    'displayNoteField',
+                    'defaultShippingMethods',
+                    'orderFulfillmentByDefault',
+                    'productLeftSidebarWidth',
+                    'productMiddleRightWidth',
+                    'productMiddleLeftWidth',
+                    'productColumn4Width',
+                    'beforeProductWidth',
+                    'beforeProductRightWidth',
+                    'afterProductWidth',
+                    'afterProductRightWidth',
+                    'defaultPaymentMethod',
+                    'fulfilledNotAllowStatus',
+                    'fulfilledCloseOrderAfter',
+                    'dontAllowSwitchOrder',
+                    'productsIndexation',
+                    'ordersIndexation',
+                    'resetFulfillmentByCloseOrder',
+                    'sortOrderItemsByCategories',
+                    'pickListProductCode',
+                    'defaultProductQty',
+                    'allowMarkFulfilled',
+                    'fulfilledAutoNote',
+                    'role',
+                    'disabledVariationsProducts',
+                    'disabledVariationsOrders',
+                    'defaultOrderTax',
+                    'wpml',
+                    'uslpBtnAutoCreate',
+                    'uslpUseReceiptToPrint',
+                    'fulfillmentFrontendSearch',
+                    'appLoginMethods',
+                    'defaultLoginMethod',
+                    'FFrestrictOrderOpening',
+                    'FFexcludeIds',
+                    'FFerrorsInPopup',
+                    'stripeApiSecretKey',
+                    'stripeApiEnabled',
+                    'stripeDefaultTerminalId',
+                    'displayTaxesForItems',
+                    'orderProductImageWidth',
+                    'customShippingStatuses',
+                );
+
+                foreach ($keys as $key) {
+                    if (isset($_POST[$key])) {
+                        if (
+                            in_array($key, array(
+                                "productStatuses",
+                                "orderStatuses",
+                                "orderStatusesAreStillNotCompleted",
+                                'productsCatalogVisibility',
+                                "notifyUsersStock",
+                                'defaultShippingMethods',
+                            )) && is_array($_POST[$key])
+                        ) {
+                            $this->post[$key] = implode(",", array_map('sanitize_text_field', wp_unslash($_POST[$key])));
+                        } else if (
+                            in_array($key, array(
+                                "customShippingStatuses",
+                            )) && is_array($_POST[$key])
+                        ) {
+                            $this->post[$key] = json_encode(array_map('sanitize_text_field', wp_unslash($_POST[$key])));
+                        } else {
+                            if (is_array($_POST[$key])) {
+                                $_value = map_deep(wp_unslash($_POST[$key]), 'sanitize_text_field');
+                            } else {
+                                $_value = sanitize_text_field(wp_unslash($_POST[$key]));
+                            }
+
+                            $this->post[$key] = $this->getRequestData($_value, $key);
+                        }
+                    }
+                }
+
+                $this->post = SettingsHelper::stripslashesDeep($this->post, false);
+
+                $this->updateSettings("updated_timestamp", time(), "text");
+
+                $isIndexed = $this->getField("indexing", "indexed", false);
+                if (!$isIndexed) {
+                    $this->updateField("indexing", "indexed", false);
+                }
+
+                $this->formSubmitSounds();
+
+                if (isset($this->post["storage"]) && $this->post["storage"] === "table") {
+                    $this->formSubmitStorageTable();
+                    return;
+                }
+
+
+                if (isset($this->post["key"])) {
+                    @delete_transient('ukrsolution_upgrade_scanner_1.13.6');
+                    $user_id = get_current_user_id();
+                    update_option($user_id . '_' . basename(USBS_PLUGIN_BASE_PATH) . '_notice_dismissed', '', true);
+                }
+            }
+
+            if (isset($this->post["tab"])) {
+                $this->activeTab = $this->post["tab"];
+            }
+
+            $this->formSubmit();
+        } catch (\Throwable $th) {
+        }
+    }
+
+    private function getRequestData($value, $key = "")
+    {
+
+        if (is_array($value)) {
+            $data = array();
+
+            foreach ($value as $key => $_value) {
+                if (is_array($_value)) {
+                    $data[$key] = $this->getRequestData($_value);
+                } else {
+                    if (in_array($key, array("customCss", 'customCssMobile', "receipt-template", "modifyPreProcessSearchString", "afterSearchJavaScript", 'fields', 'button_js'))) {
+                    } else {
+                        $data[$key] = sanitize_text_field($_value);
+                    }
+
+                }
+            }
+
+            return $data;
+        } else {
+            if (in_array($key, array("customCss", 'customCssMobile', "receipt-template", "modifyPreProcessSearchString", "afterSearchJavaScript", 'fields', 'button_js'))) {
+                return $value;
+            } else {
+                return sanitize_text_field($value);
+            }
+        }
+    }
+
+    public function getField($tab = "", $field = "", $defaultValue = "", $isEncode = false, $reSelectData = false, $excludes = array())
+    {
+        try {
+            $settings = get_option($this->dbOptionSettingsKey, array());
+
+            if (!$tab) {
+                $settingsTable = $this->getSettings("", false, $reSelectData);
+
+                $settings["prices"] = (object) array();
+                $settings["modalShowLocations"] = 0;
+                $settings["directDbSearch"] = "on";
+                $settings["receipt-width"] = "55";
+                $settings["displayCouponField"] = "on";
+                $settings["displayNoteField"] = "on";
+                $settings["displayPayButton"] = "on";
+                $settings["autoGenInvoice"] = "on";
+                $settings["orderFulfillmentEnabled"] = "on";
+                $settings["productLeftSidebarWidth"] = "235";
+                $settings["productMiddleLeftWidth"] = "320";
+                $settings["productMiddleRightWidth"] = "260";
+                $settings["productColumn4Width"] = "260";
+                $settings["productsIndexation"] = "on";
+                $settings["disabledVariationsProducts"] = "on";
+                $settings["ordersIndexation"] = "on";
+                $settings["pickListProductCode"] = "";
+                $settings["defaultProductQty"] = "1";
+                $settings["orderStatusesAreStillNotCompleted"] = "wc-pending,wc-processing,wc-on-hold";
+                $settings["allowMarkFulfilled"] = "on";
+                $settings["fulfilledAutoNote"] = "on";
+                $settings["defaultOrderTax"] = "based_on_store";
+                $settings["uslpBtnAutoCreate"] = "off";
+                $settings["allowNegativeStock"] = "on";
+                $settings["uslpUseReceiptToPrint"] = "off";
+                $settings["cartDecimalQuantity"] = "on";
+                $settings["stripeApiEnabled"] = "on";
+                $settings["priceFieldPriority"] = "wc_default";
+                $settings["displayTaxesForItems"] = "on";
+                $settings["FFrestrictOrderOpening"] = "on";
+                $settings["orderProductImageWidth"] = "64";
+
+                if (!isset($setting['sortOrderItemsByCategories'])) {
+                    $settings["fulfillmentFrontendSearch"] = "on";
+                }
+
+                if (!isset($setting['appLoginMethods'])) {
+                    $settings["appLoginMethods"] = "both";
+                }
+                if (!isset($setting['defaultLoginMethod'])) {
+                    $settings["defaultLoginMethod"] = "login_pass";
+                }
+
+                $_fields_list = array(
+                    "modalShowLocations",
+                    "directDbUpdate",
+                    "directDbSearch",
+                    "cartDecimalQuantity",
+                    "newOrderUserRequired",
+                    "fulfillmentScanItemQty",
+                    "nowOrderDefaultUser",
+                    'displaySearchCounter',
+                    'openOrderAfterCreation',
+                    'shippingRequired',
+                    'paymentRequired',
+                    "fieldForNewProduct",
+                    'orderFulfillmentEnabled',
+                    'orderFulFillmentField',
+                    'receipt-width',
+                    'receipt-template',
+                    'modifyPreProcessSearchString',
+                    'afterSearchJavaScript',
+                    'updated_timestamp',
+                    'autoStatusFulfilled',
+                    'delayBetweenScanning',
+                    'displayCouponField',
+                    'displayNoteField',
+                    'displayPayButton',
+                    'autoGenInvoice',
+                    'orderFulfillmentByDefault',
+                    'productLeftSidebarWidth',
+                    'productMiddleRightWidth',
+                    'productMiddleLeftWidth',
+                    'productColumn4Width',
+                    'beforeProductWidth',
+                    'beforeProductRightWidth',
+                    'afterProductWidth',
+                    'afterProductRightWidth',
+                    'defaultPaymentMethod',
+                    'fulfilledNotAllowStatus',
+                    'fulfilledCloseOrderAfter',
+                    'dontAllowSwitchOrder',
+                    'productsIndexation',
+                    'ordersIndexation',
+                    'resetFulfillmentByCloseOrder',
+                    'sortOrderItemsByCategories',
+                    'pickListProductCode',
+                    'defaultProductQty',
+                    'allowMarkFulfilled',
+                    'fulfilledAutoNote',
+                    'disabledVariationsProducts',
+                    'disabledVariationsOrders',
+                    'defaultOrderTax',
+                    'cfForNewProduct',
+                    'newProductStatus',
+                    'uslpBtnAutoCreate',
+                    'uslpUseReceiptToPrint',
+                    'fulfillmentFrontendSearch',
+                    'appLoginMethods',
+                    'defaultLoginMethod',
+                    'FFrestrictOrderOpening',
+                    'FFexcludeIds',
+                    'FFerrorsInPopup',
+                    'displayTaxesForItems',
+                    'orderProductImageWidth',
+                    'customShippingStatuses',
+                );
+
+                if (
+                    PermissionsHelper::onePermRequired(array('orders'), true, false) === true
+                    || PermissionsHelper::onePermRequired(array('cart'), true, false) === true
+                    || PermissionsHelper::onePermRequired(array('plugin_settings'), true, false) === true
+                ) {
+                    $_fields_list[] = 'stripeApiEnabled';
+                    $_fields_list[] = 'stripeDefaultTerminalId';
+                    $_fields_list[] = 'stripeApiSecretKey';
+                }
+
+                foreach ($settingsTable as $key => $setting) {
+                    if (in_array($setting->field_name, $excludes))
+                        continue;
+
+                    if ($setting->field_name === "settings_prices") {
+                        if ($setting->value) {
+                            $settings["prices"] = (array) $setting->value;
+                        }
+                    } elseif ($setting->field_name === "customShippingStatuses") {
+                        if ($setting->value) {
+                            $_value = str_replace("'", '"', $setting->value);
+                            $_value = json_decode($_value, true);
+                            $settings["customShippingStatuses"] = array_values($_value);
+                        }
+                    }
+                    else if (in_array($setting->field_name, $_fields_list)) {
+                        $settings[$setting->field_name] = $setting->value;
+                    }
+                    else if (in_array($setting->field_name, ["defaultOrderStatus", "orderStatusesAreStillNotCompleted", "defaultShippingMethod", "allowNegativeStock", 'defaultShippingMethods'])) {
+                        $settings[$setting->field_name] = $setting->value;
+                    }
+                }
+
+                return $settings;
+            }
+
+            if ($tab === "prices") {
+                $settingsTable = $this->getSettings("settings_prices");
+
+                if (!$settingsTable)
+                    return $defaultValue;
+
+                if (!$field)
+                    return $settingsTable;
+
+                if (!isset($settingsTable->value) || !isset($settingsTable->value->$field))
+                    return $defaultValue;
+
+                return $settingsTable->value->$field;
+            } else {
+                if (!isset($settings[$tab]))
+                    return $defaultValue;
+
+                if (!$field)
+                    return $settings[$tab];
+
+                if (!isset($settings[$tab][$field]))
+                    return $defaultValue;
+
+                if (!$settings[$tab][$field] && $defaultValue)
+                    return $defaultValue;
+
+                return $settings[$tab][$field];
+            }
+        } catch (\Throwable $th) {
+            return "";
+        }
+    }
+
+    public function getCatalogVisibility()
+    {
+        return array(
+            'visible' => __('Shop and search results', 'barcode-scanner-lite-pos-to-manage-products-inventory-and-orders'),
+            'catalog' => __('Shop only', 'barcode-scanner-lite-pos-to-manage-products-inventory-and-orders'),
+            'search' => __('Search results only', 'barcode-scanner-lite-pos-to-manage-products-inventory-and-orders'),
+            'hidden' => __('Hidden', 'barcode-scanner-lite-pos-to-manage-products-inventory-and-orders'),
+        );
+    }
+
+    public function getAllShippingMethod()
+    {
+        $cart = new Cart();
+        $methods = $cart->getAllShippingMethods();
+
+        if (!$methods) {
+            $methods = array();
+        }
+
+        return $methods;
+    }
+
+    public function getUsers()
+    {
+        $users = array();
+        $result = array();
+
+        if (!$users) {
+            $users = array();
+        }
+
+        foreach ($users as $user) {
+            $result[] = array(
+                "ID" => $user->ID,
+                "display_name" => $user->display_name,
+                "permission" => get_user_meta($user->ID, $this->userPermissionKey, true)
+            );
+        }
+
+        return $result;
+    }
+
+    public function getTotalIndexedRecords()
+    {
+        global $wpdb;
+
+        // @codingStandardsIgnoreStart
+        $tablePosts = $wpdb->prefix . Database::$posts;
+        $posts = $wpdb->get_row("SELECT COUNT(P.id) as 'total' FROM {$tablePosts} AS P WHERE P.successful_update = '1' AND P.updated != '0000-00-00 00:00:00';");
+        // @codingStandardsIgnoreEnd
+
+        if ($posts && $posts->total) {
+            return $posts->total;
+        }
+
+        return 0;
+    }
+
+    public function getTotalCantIndexedRecords()
+    {
+        global $wpdb;
+
+        // @codingStandardsIgnoreStart
+        $tablePosts = $wpdb->prefix . Database::$posts;
+        $posts = $wpdb->get_row("SELECT COUNT(P.id) as 'total' FROM {$tablePosts} AS P WHERE P.successful_update = '0' AND P.post_type IN('product', 'product_variation', 'shop_order', 'shop_order_placehold');");
+        // @codingStandardsIgnoreEnd
+
+        if ($posts && $posts->total) {
+            return $posts->total;
+        }
+
+        return 0;
+    }
+
+    public function getTotalPosts()
+    {
+        $result = Database::updatePostsTable(0, 1, false, true);
+        $total = 0;
+
+        if ($result && isset($result["total"])) {
+            $total = $result["total"];
+        }
+
+
+        return $total;
+    }
+
+    public function updateField($tab, $field, $value)
+    {
+    }
+    private function formSubmit()
+    {
+        try {
+            if (!$this->post) {
+                return;
+            }
+
+            if (!isset($this->post["tab"])) {
+                return;
+            }
+
+            if (isset($this->post["storage"]) && $this->post["storage"] === "table") {
+                return;
+            }
+
+            if ($this->post["tab"] === "prices") {
+                $this->updateSettings("settings_prices", json_encode($this->post));
+            }
+
+
+        } catch (\Throwable $th) {
+        }
+    }
+
+    private function formSubmitFrontendPermissions()
+    {
+        try {
+            foreach ($this->getUsers() as $user) {
+                update_user_meta($user["ID"], $this->userPermissionKey, "0");
+            }
+
+            foreach ($this->frontendPermissions as $id) {
+                update_user_meta($id, $this->userPermissionKey, "1");
+            }
+        } catch (\Throwable $th) {
+        }
+    }
+
+    private function formSubmitRolePermissions()
+    {
+        try {
+            update_option($this->dbOptionRolesPermissionsKey, $this->rolesPermissions);
+        } catch (\Throwable $th) {
+        }
+    }
+
+    private function formSubmitPlugins()
+    {
+        try {
+            update_option($this->dbOptionPluginsKey, $this->plugins);
+        } catch (\Throwable $th) {
+        }
+    }
+
+    private function formSubmitStorageTable()
+    {
+        try {
+
+            if (isset($this->post['wpml']) && isset($this->post['wpml']['languages']) && is_array($this->post['wpml']['languages'])) {
+                $searchFilter = SearchFilter::get();
+                $translations = null;
+
+                if (WPML::status()) {
+                    $translations = WPML::getTranslations();
+                }
+
+                if ($searchFilter) {
+                    $searchFilter['wpml'] = array();
+
+                    foreach ($translations as $lang => $translation) {
+                        if (isset($this->post['wpml']['languages'][$lang])) {
+                            $searchFilter['wpml'][$lang] = $this->post['wpml']['languages'][$lang] == 1;
+                        } else {
+                            $searchFilter['wpml'][$lang] = false;
+                        }
+                    }
+
+                    $this->updateSettings('search_filter', json_encode($searchFilter));
+                }
+            }
+
+
+            foreach ($this->post as $key => $value) {
+                if (!in_array($key, array("tab", "storage", "locations"))) {
+
+                    $this->updateSettings($key, $value, "text");
+
+                }
+            }
+        } catch (\Throwable $th) {
+        }
+    }
+
+    private function formSubmitSounds()
+    {
+        try {
+            // phpcs:disable WordPress.Security.NonceVerification.Missing
+
+            $fileName = isset($_FILES['increaseFile']['name']) ? sanitize_file_name(wp_unslash($_FILES['increaseFile']['name'])) : '';
+
+            if ($fileName) {
+                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES is a file upload structure and is validated before use.
+                $file = isset($_FILES['increaseFile']) ? $_FILES['increaseFile'] : null;
+
+                if (
+                    is_array($file) &&
+                    isset($file['name'], $file['tmp_name'], $file['error']) &&
+                    (int) $file['error'] === UPLOAD_ERR_OK
+                ) {
+                    $url = $this->uploadFile($file);
+                    $this->updateSettings("sound_increase", $url, "text");
+                }
+            }
+
+            $fileName = isset($_FILES['decreaseFile']['name']) ? sanitize_file_name(wp_unslash($_FILES['decreaseFile']['name'])) : '';
+
+            if ($fileName) {
+                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES is a file upload structure and is validated before use.
+                $file = isset($_FILES['decreaseFile']) ? $_FILES['decreaseFile'] : null;
+
+                if (
+                    is_array($file) &&
+                    isset($file['name'], $file['tmp_name'], $file['error']) &&
+                    (int) $file['error'] === UPLOAD_ERR_OK
+                ) {
+                    $url = $this->uploadFile($file);
+                    $this->updateSettings("sound_decrease", $url, "text");
+                }
+            }
+
+            $fileName = isset($_FILES['failFile']['name']) ? sanitize_file_name(wp_unslash($_FILES['failFile']['name'])) : '';
+
+            if ($fileName) {
+                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES is a file upload structure and is validated before use.
+                $file = isset($_FILES['failFile']) ? $_FILES['failFile'] : null;
+
+                if (
+                    is_array($file) &&
+                    isset($file['name'], $file['tmp_name'], $file['error']) &&
+                    (int) $file['error'] === UPLOAD_ERR_OK
+                ) {
+                    $url = $this->uploadFile($file);
+                    $this->updateSettings("sound_fail", $url, "text");
+                }
+            }
+
+            $fileName = isset($_FILES['ffEndFile']['name']) ? sanitize_file_name(wp_unslash($_FILES['ffEndFile']['name'])) : '';
+
+            if ($fileName) {
+                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES is a file upload structure and is validated before use.
+                $file = isset($_FILES['ffEndFile']) ? $_FILES['ffEndFile'] : null;
+
+                if (
+                    is_array($file) &&
+                    isset($file['name'], $file['tmp_name'], $file['error']) &&
+                    (int) $file['error'] === UPLOAD_ERR_OK
+                ) {
+                    $url = $this->uploadFile($file);
+                    $this->updateSettings("sound_ffEnd", $url, "text");
+                }
+            }
+
+            // phpcs:enable WordPress.Security.NonceVerification.Missing
+        } catch (\Throwable $th) {
+            throw $th;
+        }
+    }
+
+    private function uploadFile($file)
+    {
+        try {
+            $wp_upload_dir = wp_upload_dir();
+            $upload_dir = $wp_upload_dir['basedir'] . '/barcode-scanner/';
+            $upload_dir_url = $wp_upload_dir['baseurl'] . '/barcode-scanner/';
+
+            if (!file_exists($upload_dir)) {
+                wp_mkdir_p($upload_dir);
+            }
+            if (!file_exists($upload_dir . 'sounds')) {
+                wp_mkdir_p($upload_dir . 'sounds');
+            }
+
+            $dt = new \DateTime("now");
+            $fileName = $dt->format("dmYhis") . "-" . $file["name"];
+
+            $allowedFileTypes = array('mp3', 'mpeg');
+            $checked = wp_check_filetype_and_ext($file['tmp_name'], $file['name']);
+
+            if (isset($checked["ext"]) && in_array($checked["ext"], $allowedFileTypes)) {
+
+                require_once ABSPATH . 'wp-admin/includes/file.php';
+
+                $upload = wp_handle_upload($file, ['test_form' => false]);
+
+                return str_replace(home_url(), '', $upload['url']);
+            }
+
+            return null;
+        } catch (\Throwable $th) {
+            throw $th;
+        }
+    }
+
+    public function getRoles()
+    {
+        global $wp_roles;
+
+        $allRoles = $wp_roles->roles;
+
+        return $allRoles;
+    }
+
+    public function getPlugins()
+    {
+        $plugins = get_plugins();
+
+        $userSettings = get_option($this->dbOptionPluginsKey, array());
+
+        $default = array(
+            "barcode-scanner.php",
+            "woocommerce/woocommerce.php",
+            "atum-stock-manager-for-woocommerce.php",
+            "ean-for-woocommerce/ean-for-woocommerce.php",
+            "ean-for-woocommerce-pro/ean-for-woocommerce-pro.php",
+            "woo-add-gtin/woocommerce-gtin.php",
+            "product-gtin-ean-upc-isbn-for-woocommerce/product-gtin-ean-upc-isbn-for-woocommerce.php",
+            "aftership-woocommerce-tracking/aftership-woocommerce-tracking.php",
+            "woo-advanced-shipment-tracking/woocommerce-advanced-shipment-tracking.php",
+            "yith-woocommerce-order-tracking/init.php",
+            "wt-woocommerce-sequential-order-numbers/wt-advanced-order-number.php",
+            "yith-point-of-sale-for-woocommerce-premium/init.php",
+            "woocommerce-sequential-order-numbers-pro/woocommerce-sequential-order-numbers-pro.php",
+            "stock-locations-for-woocommerce/stock-locations-for-woocommerce.php",
+            "woocommerce-wholesale-pricing/woocommerce-wholesale-pricing.php",
+            "zettle-pos-integration/zettle-pos-integration.php",
+            "dokan-lite/dokan.php",
+            "custom-order-statuses-for-woocommerce/custom-order-statuses-for-woocommerce.php",
+            "checkout-fees-for-woocommerce/checkout-fees-for-woocommerce.php",
+            "sitepress-multilingual-cms/sitepress.php",
+            "bp-custom-order-status-for-woocommerce/main.php",
+            "polylang/polylang.php",
+            "polylang-pro/polylang.php",
+            "woocommerce-order-status-manager/woocommerce-order-status-manager.php",
+            "wp-mail-smtp/wp_mail_smtp.php",
+            "yith-woocommerce-barcodes-premium/init.php",
+            "ni-woocommerce-custom-order-status/ni-woocommerce-custom-order-status.php"
+        );
+
+        foreach ($plugins as $slug => &$value) {
+            if (empty($userSettings)) {
+                $value["bs_active"] = in_array($slug, $default) ? 1 : 0;
+            } else {
+                $value["bs_active"] = in_array($slug, $userSettings) ? 1 : 0;
+            }
+        }
+
+        return $plugins;
+    }
+
+    public function getRolePermissions($role)
+    {
+        $roles = get_option($this->dbOptionRolesPermissionsKey, null);
+        $defaultAccess = array("administrator", "shop_manager");
+        $defaultFrontAccess = array("barcode_scanner_front_end");
+
+        if ($roles) {
+            foreach ($roles as $key => &$value) {
+                if (!isset($value["show_prices"])) {
+                    $value["show_prices"] = in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0;
+                }
+                if (!isset($value["edit_prices"])) {
+                    $value["edit_prices"] = in_array($key, $defaultAccess) ? 1 : 0;
+                }
+                if (!isset($value["order_edit"])) {
+                    $value["order_edit"] = in_array($key, $defaultAccess) ? 1 : 0;
+                }
+                if (!isset($value["order_edit_address"])) {
+                    $value["order_edit_address"] = in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0;
+                }
+            }
+        }
+
+        if ($roles === null || !$roles) {
+            $roles = array();
+
+            foreach ($this->getRoles() as $key => $value) {
+                $roles[$key] = array(
+                    "inventory" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "newprod" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "orders" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "onlymy" => 0,
+                    "show_prices" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "order_edit" => in_array($key, $defaultAccess) ? 1 : 0,
+                    "order_edit_address" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "edit_prices" => in_array($key, $defaultAccess) ? 1 : 0,
+                    "cart" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "linkcustomer" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "link_current_user" => 0,
+                    "frontend" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "plugin_settings" => in_array($key, $defaultAccess) ? 1 : 0,
+                    "plugin_logs" => in_array($key, $defaultAccess) ? 1 : 0,
+                    "app_qty_plus" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "app_qty_minus" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "app_save_list" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "prod_search_action" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "psa_decrease_m1" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "psa_decrease_my" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "psa_increase_p1" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "psa_increase_px" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "psa_open_product" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "order_search_action" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "osa_open_in_tab" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                    "osa_change_status" => in_array($key, $defaultAccess) || in_array($key, $defaultFrontAccess) ? 1 : 0,
+                );
+            }
+        }
+
+        if (!isset($roles["barcode_scanner_front_end"])) {
+            $roles["barcode_scanner_front_end"] = array(
+                "inventory" => 1,
+                "newprod" => 1,
+                "orders" => 1,
+                "onlymy" => 0,
+                "show_prices" => 0,
+                "order_edit" => 0,
+                "order_edit_address" => 0,
+                "edit_prices" => 0,
+                "cart" => 1,
+                "linkcustomer" => 1,
+                "link_current_user" => 0,
+                "frontend" => 1,
+                "plugin_settings" => 0,
+                "plugin_logs" => 0,
+                "app_qty_plus" => 1,
+                "app_qty_minus" => 1,
+                "app_save_list" => 1,
+                "prod_search_action" => 1,
+                "psa_decrease_m1" => 1,
+                "psa_decrease_my" => 1,
+                "psa_increase_p1" => 1,
+                "psa_increase_px" => 1,
+                "psa_open_product" => 1,
+                "order_search_action" => 1,
+                "osa_open_in_tab" => 1,
+                "osa_change_status" => 1
+            );
+        }
+
+        if (isset($roles[$role])) {
+            $data = $roles[$role];
+            if (!isset($data["newprod"]) && isset($data["inventory"]))
+                $data["newprod"] = $data["inventory"];
+            if (!isset($data["linkcustomer"]) && isset($data["cart"]))
+                $data["linkcustomer"] = $data["cart"];
+
+            return $data;
+        }
+
+        return array();
+    }
+
+    public function resetOptionsSettings()
+    {
+        delete_option($this->dbOptionRolesPermissionsKey);
+        delete_option("barcode-scanner-settings-options");
+    }
+
+    public function getUserRolePermissions($userId = null)
+    {
+        $result = array(
+            "inventory" => 0,
+            "newprod" => 0,
+            "orders" => 0,
+            "onlymy" => 0,
+            "show_prices" => 0,
+            "order_edit" => 0,
+            "order_edit_address" => 0,
+            "edit_prices" => 0,
+            "cart" => 0,
+            "linkcustomer" => 0,
+            "link_current_user" => 0,
+            "frontend" => 0,
+            "plugin_settings" => 0,
+            "plugin_logs" => 0,
+            "app_qty_plus" => 0,
+            "app_qty_minus" => 0,
+            "app_save_list" => 0,
+            "prod_search_action" => 0,
+            "psa_decrease_m1" => 0,
+            "psa_decrease_my" => 0,
+            "psa_increase_p1" => 0,
+            "psa_increase_px" => 0,
+            "psa_open_product" => 0,
+            "order_search_action" => 0,
+            "osa_open_in_tab" => 0,
+            "osa_change_status" => 0
+        );
+
+        if (!$userId) {
+            $userId = get_current_user_id();
+        }
+
+        if (!$userId) {
+            return $result;
+        }
+
+        $userMeta = get_userdata($userId);
+        $userRoles = $userMeta ? $userMeta->roles : null;
+
+        if ($userRoles) {
+            foreach ($userRoles as $roleKey) {
+                $permissions = $this->getRolePermissions($roleKey);
+
+                if (is_array($permissions)) {
+                    foreach ($permissions as $key => $value) {
+                        if ($value == 1) {
+                            $result[$key] = 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        $result = apply_filters('barcode_scanner_tabs_permissions', $result, $userId);
+
+        return $result;
+    }
+
+    public function getAppUsersPermissions()
+    {
+        return array();
+    }
+
+
+    public function generateRandomString($length = 10)
+    {
+        $characters = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        $charactersLength = strlen($characters);
+        $randomString = '';
+        for ($i = 0; $i < $length; $i++) {
+            $randomString .= $characters[wp_rand(0, $charactersLength - 1)];
+        }
+        return $randomString;
+    }
+
+    public function updateSettingsArray(WP_REST_Request $request)
+    {
+        $data = $request->get_param("data");
+
+        if (!$data) {
+            return;
+        }
+
+        if (!is_array($data)) {
+            return;
+        }
+
+        foreach ($data as $key => $value) {
+            $this->updateSettings($key, $value, "text");
+        }
+
+        return rest_ensure_response($data);
+    }
+
+    public function loadSettingsArray(WP_REST_Request $request)
+    {
+        $platform = $request->get_param("platform");
+        $result = array();
+
+        if ($platform !== "web") {
+            if ($this->coreInstance) {
+                $MobileRouter = new MobileRouter();
+                $urlData = $MobileRouter->getParamsFromPlainUrl();
+                $jsData = $this->coreInstance->adminEnqueueScripts(true, true, $urlData);
+                $usbs = $jsData && isset($jsData['usbs']) ? $jsData['usbs'] : array();
+
+                $result["usbs"] = $usbs;
+            }
+        }
+
+        return rest_ensure_response($result);
+    }
+
+    public function saveTemplateOrderId(WP_REST_Request $request)
+    {
+        $orderId = $request->get_param("orderId");
+
+        if ($orderId && is_numeric($orderId)) {
+            $settings = new Settings();
+            $settings->updateSettings("receiptOrderPreview", $orderId, "text");
+        }
+
+        return rest_ensure_response(array("orderId" => esc_attr($orderId)));
+    }
+
+    public function findOrder(WP_REST_Request $request)
+    {
+        $query = $request->get_param("query");
+        $query = trim($query);
+        $query = addslashes($query);
+
+        if ($query) {
+            $managementActions = new ManagementActions();
+            $orderRequest = new WP_REST_Request("", "");
+            $orderRequest->set_param("query", $query);
+            $orderRequest->set_param("autoFill", true);
+            $orderRequest->set_param("page", "history");
+            $result = $managementActions->orderSearch($orderRequest);
+            if ($result->data && isset($result->data["orders"]) && count($result->data["orders"])) {
+                return rest_ensure_response(array('orders' => $result->data["orders"]));
+            }
+        }
+
+        return rest_ensure_response(array('orders' => array()));
+    }
+}

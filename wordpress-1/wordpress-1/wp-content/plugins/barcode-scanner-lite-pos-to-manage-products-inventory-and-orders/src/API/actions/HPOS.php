@@ -1,0 +1,814 @@
+<?php
+
+namespace UkrSolution\BarcodeScanner\API\actions;
+
+use UkrSolution\BarcodeScanner\API\classes\OrdersHelper;
+use UkrSolution\BarcodeScanner\API\classes\PickList;
+use UkrSolution\BarcodeScanner\API\classes\Post;
+use UkrSolution\BarcodeScanner\API\classes\ProductsHelper;
+use UkrSolution\BarcodeScanner\API\classes\Results;
+use UkrSolution\BarcodeScanner\API\classes\ResultsHelper;
+use UkrSolution\BarcodeScanner\API\classes\SearchFilter;
+use UkrSolution\BarcodeScanner\API\classes\Users;
+use UkrSolution\BarcodeScanner\Database;
+use UkrSolution\BarcodeScanner\features\cart\Cart;
+use UkrSolution\BarcodeScanner\features\Debug\Debug;
+use UkrSolution\BarcodeScanner\features\interfaceData\InterfaceData;
+use UkrSolution\BarcodeScanner\features\settings\Settings;
+use UkrSolution\BarcodeScanner\features\settings\SettingsHelper;
+
+class HPOS
+{
+    private static $filter_search_query = "scanner_search_query";
+    private static $filter_get_after = "barcode_scanner_%field_get_after";
+    private static $limit = 20;
+    private static $onlyById = false;
+    private static $filterExcludes = array();
+
+    public static function getStatus()
+    {
+        try {
+            return \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled() == true;
+        } catch (\Throwable $th) {
+            return false;
+        }
+
+        return false;
+    }
+
+    public static function findOrders($query, $filter, $onlyById, $autoFill, $filterExcludes)
+    {
+        global $wpdb;
+
+        $settings = new Settings();
+
+        $field = $settings->getSettings("searchResultsLimit");
+        $searchResultsLimit = $field === null ? 20 : (int) $field->value;
+        $searchResultsLimit = $searchResultsLimit ? $searchResultsLimit : 20;
+        $searchResultsLimit = $searchResultsLimit > 999 ? 999 : $searchResultsLimit;
+
+
+        if ($searchResultsLimit != self::$limit && $searchResultsLimit > 0) {
+            self::$limit = $searchResultsLimit;
+        }
+
+        self::$onlyById = $onlyById;
+        self::$filterExcludes = $filterExcludes;
+
+        $excludeStatuses = "";
+        $orderStatusesField = $settings->getSettings("orderStatuses");
+        $excludeStatuses = $orderStatusesField === null ? "wc-checkout-draft,trash" : $orderStatusesField->value;
+
+        if ($excludeStatuses) {
+            $excludeStatusesArr = explode(",", $excludeStatuses);
+
+            if ($excludeStatusesArr) {
+                foreach ($excludeStatusesArr as $value) {
+                    if (preg_match('/^wc\-(.*?)?$/', $value, $m)) {
+                        $excludeStatusesArr[] = $m[1];
+                    }
+                }
+                $excludeStatuses = implode(',', $excludeStatusesArr);
+            }
+        }
+
+        $filterWithoutTitle = $filter;
+        $findByTitle = false;
+
+        if (self::isUrl($query)) {
+            $query = urldecode($query);
+        }
+
+        $query = trim($query);
+        $query = str_replace("'", "\'", $query);
+
+        $queryFromUrl = self::checkUrlInQuery($query, $filter);
+
+        if ($query != $queryFromUrl && is_numeric($queryFromUrl)) {
+            if (isset($filterWithoutTitle["products"]) && $filterWithoutTitle["products"]["prod_link"]) {
+                $filterWithoutTitle["products"]["ID"] = 1;
+            }
+
+            $query = $queryFromUrl;
+        }
+
+        $sql = self::sqlBuilder($query, $filterWithoutTitle, $excludeStatuses, array());
+
+
+
+
+        // @codingStandardsIgnoreStart
+        $orders = $wpdb->get_results($sql);
+        $total = $wpdb->get_row("SELECT FOUND_ROWS() as `total`");
+        // @codingStandardsIgnoreEnd
+
+        Debug::addPoint("1. sql");
+        Debug::addPoint($sql);
+        Debug::addPoint("1. orders = " . count($orders));
+
+        if (count($orders)) {
+
+            return array(
+                "total" => $total ? $total->total : 0,
+                "limit" => $searchResultsLimit,
+                "posts" => $orders,
+                "filter" => (new Post())->getFilterParams($filterWithoutTitle),
+                "findByTitle" => $findByTitle,
+                "query" => $query
+            );
+        }
+
+        return array(
+            "total" => $total ? $total->total : 0,
+            "limit" => $searchResultsLimit,
+            "posts" => null,
+            "findByTitle" => null,
+            "query" => $query
+        );
+    }
+
+    private static function isUrl($query)
+    {
+        try {
+            return preg_match("/.*?post=([\d]+).*?/", $query, $m) || (function_exists("wp_http_validate_url") && \wp_http_validate_url($query)) ? true : false;
+        } catch (\Throwable $th) {
+            return false;
+        }
+    }
+
+    private static function checkUrlInQuery($query, $filter)
+    {
+        try {
+            if (!$filter || !isset($filter["products"])) {
+                return $query;
+            }
+
+            if (!isset($filter["products"]["prod_link"]) || $filter["products"]["prod_link"] != "1") {
+                return $query;
+            }
+
+            $id = self::isUrl($query) ? url_to_postid($query) : "";
+
+            if ($id) {
+                return $id;
+            } else if (preg_match("/.*?post=([\d]+).*?/", $query, $m)) {
+                if (count($m) == 2 && is_numeric($m[1])) {
+                    return $m[1];
+                } else {
+                    return $query;
+                }
+            } else {
+                return $query;
+            }
+        } catch (\Throwable $th) {
+            return $query;
+        }
+    }
+
+    private static function sqlBuilder($query, $filter, $excludeStatuses, $availableStatuses = [])
+    {
+        global $wpdb;
+
+        $queryLike = str_replace(" ", "%", $query);
+
+        $posts = $wpdb->prefix . Database::$posts;
+        $columns = $wpdb->prefix . Database::$columns;
+        $metaFieldPrefix = Database::$postMetaFieldPrefix;
+
+        // @codingStandardsIgnoreStart
+        $tableColumns = $wpdb->get_results("SELECT * FROM {$columns} AS C;");
+        // @codingStandardsIgnoreEnd
+
+        $statuses = explode(",", $excludeStatuses);
+        if (!count($statuses)) {
+            $statuses[] = "trash";
+        }
+
+        $selectColumns = array();
+        $params = (new Post())->getFilterParams($filter);
+        $isNumeric = (preg_match('/^[0-9]{0,20}$/', trim($query), $m)) ? true : false;
+
+        // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+
+        $sql = "SELECT SQL_CALC_FOUND_ROWS O.* FROM {$wpdb->prefix}barcode_scanner_posts AS P, {$wpdb->prefix}wc_orders AS O WHERE O.id = P.post_id";
+
+
+        $statuses_placeholders = implode(', ', array_fill(0, count($statuses), '%s'));
+        $sql .= $wpdb->prepare(" AND ( P.post_status NOT IN( $statuses_placeholders ) OR P.post_status IS NULL )  ", $statuses);
+        $sql .= $wpdb->prepare(" AND ( P.post_parent = 0 OR P.post_parent IS NULL OR P.post_parent_status IS NUll OR P.post_parent_status NOT IN( $statuses_placeholders )  )   ", $statuses);
+
+        // phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+
+
+        $sql .= " AND ( ";
+
+
+        $filterSql = "";
+
+        if ($params['postID'] && $isNumeric) {
+
+            // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+
+            if (!empty($params['post_types'])) {
+
+                $placeholders = implode(', ', array_fill(0, count($params['post_types']), '%s'));
+
+                if (2 === (int) $params['postID']) {
+                    $filterSql = $wpdb->prepare(
+                        "( P.post_id LIKE %s AND P.post_type IN ({$placeholders}) )",
+                        array_merge(['%' . $query . '%'], $params['post_types'])
+                    );
+                } else {
+                    $filterSql = $wpdb->prepare(
+                        "( P.post_id = %d AND P.post_type IN ({$placeholders}) )",
+                        array_merge([(int) $query], $params['post_types'])
+                    );
+                }
+            } else {
+                $filterSql = $wpdb->prepare('P.post_id = %d', (int) $query);
+            }
+
+            // phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+        }
+
+
+
+        if ($params["_order_number"] != 0) {
+            $filterSql .= (strlen($filterSql)) ? " OR " : "";
+            $types = array("shop_order");
+            $_sql = self::sqlComp($params["_order_number"], $types, $query, "P.{$metaFieldPrefix}_order_number");
+            $filterSql .= $_sql;
+            $selectColumns[] = "{$_sql} AS '_order_number'";
+        }
+
+        if ($params["hook_order_number"] != 0) {
+            $filterSql .= (strlen($filterSql)) ? " OR " : "";
+            $types = array("shop_order");
+            $_sql = self::sqlComp($params["hook_order_number"], $types, $query, "P.hook_order_number");
+            $filterSql .= $_sql;
+            $selectColumns[] = "{$_sql} AS 'hook_order_number'";
+        }
+
+        if ($params["_billing_address_index"] != 0) {
+            $filterSql .= (strlen($filterSql)) ? " OR " : "";
+            $types = array("shop_order");
+            $_sql = self::sqlComp($params["_billing_address_index"], $types, $query, "P.{$metaFieldPrefix}_billing_address_index");
+            $filterSql .= $_sql;
+            $selectColumns[] = "{$_sql} AS '_billing_address_index'";
+        }
+
+        if ($params["_shipping_address_index"] != 0) {
+            $filterSql .= (strlen($filterSql)) ? " OR " : "";
+            $types = array("shop_order");
+            $_sql = self::sqlComp($params["_shipping_address_index"], $types, $query, "P.{$metaFieldPrefix}_shipping_address_index");
+            $filterSql .= $_sql;
+            $selectColumns[] = "{$_sql} AS '_shipping_address_index'";
+        }
+
+        if ($params["ywot_tracking_code"] != 0) {
+            $filterSql .= (strlen($filterSql)) ? " OR " : "";
+            $types = array("shop_order");
+            $_sql = self::sqlComp($params["ywot_tracking_code"], $types, $query, "P.{$metaFieldPrefix}ywot_tracking_code");
+            $filterSql .= $_sql;
+            $selectColumns[] = "{$_sql} AS 'ywot_tracking_code'";
+        }
+        if ($params["_wc_shipment_tracking_items"] != 0) {
+            $filterSql .= (strlen($filterSql)) ? " OR " : "";
+            $types = array("shop_order");
+            $_sql = self::sqlComp($params["_wc_shipment_tracking_items"], $types, $query, "P.{$metaFieldPrefix}_wc_shipment_tracking_items");
+            $filterSql .= $_sql;
+            $selectColumns[] = "{$_sql} AS '_wc_shipment_tracking_items'";
+        }
+        if ($params["_aftership_tracking_items"] != 0) {
+            $filterSql .= (strlen($filterSql)) ? " OR " : "";
+            $types = array("shop_order");
+            $_sql = self::sqlComp($params["_aftership_tracking_items"], $types, $query, "P.{$metaFieldPrefix}_aftership_tracking_items");
+            $filterSql .= $_sql;
+            $selectColumns[] = "{$_sql} AS '_aftership_tracking_items'";
+        }
+
+        $limit = (int) self::$limit;
+        $sql .= ($filterSql) ? $filterSql : " 1 != 1 ";
+        $sql .= $wpdb->prepare(" ) GROUP BY P.ID ORDER BY P.post_modified DESC, P.post_date DESC LIMIT %d ", $limit);
+
+        return $sql;
+
+
+    }
+
+    private static function sqlComp($status, $types, $query, $field)
+    {
+        global $wpdb;
+
+        if (empty($types)) {
+            return '';
+        }
+
+        // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+
+        $type_placeholders = implode(', ', array_fill(0, count($types), '%s'));
+
+        if (1 === (int) $status) {
+            return $wpdb->prepare("( P.post_type IN ( {$type_placeholders} ) AND {$field} = %s )", array_merge($types, array($query)));
+        }
+
+        return $wpdb->prepare("( P.post_type IN ( {$type_placeholders} ) AND {$field} LIKE %s )", array_merge($types, array('%' . $query . '%')));
+
+        // phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+    }
+
+    public static function ordersPrepare($posts, $additionalFields = array(), $autoFill = false, $page = '')
+    {
+        $orders = array();
+
+        if (!$posts) {
+            return $orders;
+        }
+
+        if (count($posts) > 1) {
+            foreach ($posts as $post) {
+                $order = self::formatOrder($post, $additionalFields, 'orders_list');
+
+                if ($order) {
+                    $orders[] = $order;
+                }
+            }
+        } elseif (count($posts)) {
+            $post = $posts[0];
+            $order = self::formatOrder($post, $additionalFields, $page);
+
+            if ($order) {
+                $orders[] = $order;
+            }
+        }
+
+        return $orders;
+    }
+
+    public static function formatOrder($post, $additionalFields = array(), $page = '')
+    {
+        $order = null;
+
+        Debug::addPoint(" - formatOrder");
+
+        try {
+            if (!isset($post->ID) && isset($post->id)) {
+                $post->ID = $post->id;
+            }
+            $order = new \WC_Order($post->ID);
+        } catch (\Throwable $th) {
+        }
+
+        Debug::addPoint(" - formatOrder WC_Order");
+
+        if ($order && $order->get_id()) {
+            $reflect = new \ReflectionClass($order);
+
+
+            Debug::addPoint(" - formatOrder ReflectionClass");
+
+
+            if ($reflect->getShortName() === "OrderRefund") {
+                return null;
+            }
+
+            if ($page == 'orders_list') {
+                return self::assignOrderListProps($post, $order, $additionalFields, $page);
+            } else {
+                return self::assignOrderProps($post, $order, $additionalFields, $page);
+            }
+        }
+
+        return null;
+    }
+
+    private static function assignOrderProps($post, $order, $additionalFields = array(), $page = '')
+    {
+        global $wpdb;
+
+        Debug::addPoint(" - formatOrder assignOrderProps");
+
+        $products = array();
+        $items = $order->get_items("line_item");
+        $currencySymbol = get_woocommerce_currency_symbol(get_woocommerce_currency());
+        $currencyLabel = get_woocommerce_currency();
+
+        Debug::addPoint(" - formatOrder currency");
+
+        $order_subtotal_tax = 0;
+        $order_subtotal_taxes = array();
+
+        $shipping_class_names = \WC()->shipping->get_shipping_method_class_names();
+
+        $settings = new Settings();
+
+        $order_shipping = 0;
+        $order_shipping_tax = 0;
+        $order_shipping_name = "";
+        $order_shipping_title = "";
+
+        Debug::addPoint(" - formatOrder shipping class names");
+
+        foreach ($order->get_items("shipping") as $value) {
+            if ($value->get_total()) {
+                $order_shipping += $value->get_total();
+            }
+
+            if ($value->get_total_tax()) {
+                $order_shipping_tax += $value->get_total_tax();
+            }
+
+            $order_shipping_name = $value->get_name();
+            $order_shipping_title = $value->get_method_title();
+            $method_id = $value->get_method_id();
+            $instance_id = $value->get_instance_id();
+
+            try {
+                if ($shipping_class_names && isset($shipping_class_names[$method_id])) {
+                    $method_instance = new $shipping_class_names[$method_id]($instance_id);
+
+                    $order_shipping_title = $method_instance->method_title;
+                }
+            } catch (\Throwable $th) {
+            }
+        }
+
+        Debug::addPoint(" - formatOrder shipping");
+
+        $order_payment = $order->get_payment_method();
+        $order_payment_title = $order->get_payment_method_title();
+
+        $additionalTaxes = array();
+
+        foreach ($order->get_items("fee") as $value) {
+            $additionalTaxes[] = array(
+                "label" => $value->get_name(),
+                "value" => $value->get_total(),
+                "value_c" => wp_strip_all_tags(wc_price($value->get_total())),
+                "tax" => $value->get_total_tax(),
+                "tax_c" => wp_strip_all_tags(wc_price($value->get_total_tax())),
+                "plugin" => "",
+            );
+        }
+
+        Debug::addPoint(" - formatOrder payment & fee");
+
+        foreach ($items as $item) {
+            OrdersHelper::assignOrderItemProps($products, $order_subtotal_tax, $order_subtotal_taxes, $order, $item, $settings);
+        }
+
+        Debug::addPoint(" - formatOrder items");
+
+        $customerId = $order->get_customer_id();
+        $user = $order->get_user();
+        $userData = null;
+
+        if ($customerId && $user) {
+            $userData = $user->data;
+            $userData->phone = get_user_meta($user->ID, 'billing_phone', true);
+            $userData->avatar = @get_avatar_url($customerId);
+        }
+
+        $orderDate = new \DateTime($order->get_date_created());
+        $date_format = $order->get_date_created();
+        $date_format->setTimezone(new \DateTimeZone(\wp_timezone_string()));
+        $date_format = $date_format->format("Y-m-d H:i:s");
+
+        $customerName = $order->get_billing_first_name() . " " . $order->get_billing_last_name();
+        $customerName = trim($customerName);
+        $customerCountry = $order->get_billing_country();
+        $previewDateFormat = $orderDate->format("F j, Y");
+        $previewDateFormat = SettingsHelper::dateTranslate($previewDateFormat);
+
+        if (!$customerName && $customerId) {
+            $customerName = get_user_meta($customerId, 'first_name', true) . ' ' . get_user_meta($customerId, 'last_name', true);
+        }
+
+        Debug::addPoint(" - formatOrder user");
+
+        $fulfillmentUser = OrdersHelper::getOrderFulfillmentUser($order->get_id());
+
+        $fulfillment_user_name = "";
+        $fulfillment_user_email = "";
+        $fulfillment_user_id = "";
+
+        if ($fulfillmentUser) {
+            $fulfillment_user_name = $fulfillmentUser->display_name ? $fulfillmentUser->display_name : $fulfillmentUser->user_nicename;
+            $fulfillment_user_email = $fulfillmentUser->user_email;
+            $fulfillment_user_id = $fulfillmentUser->ID;
+        }
+
+        $fulfillmentField = $settings->getSettings("orderFulFillmentField");
+        $fulfillmentField = $fulfillmentField === null ? "" : $fulfillmentField->value;
+
+        $orderStatusesAreStillNotCompleted = $settings->getSettings("orderStatusesAreStillNotCompleted");
+        $orderStatusesAreStillNotCompleted = $orderStatusesAreStillNotCompleted === null ? "wc-pending,wc-processing,wc-on-hold" : $orderStatusesAreStillNotCompleted->value;
+
+        $sortOrderItemsByCategories = $settings->getSettings("sortOrderItemsByCategories");
+        $sortOrderItemsByCategories = $sortOrderItemsByCategories === null ? "" : $sortOrderItemsByCategories->value;
+
+        Debug::addPoint(" - formatOrder fulfillment");
+
+        $bStates = WC()->countries->get_states($order->get_billing_country());
+        $bState = !empty($bStates[$order->get_billing_state()]) ? $bStates[$order->get_billing_state()] : '';
+
+        $sStates = WC()->countries->get_states($order->get_shipping_country());
+        $sState = !empty($sStates[$order->get_shipping_state()]) ? $sStates[$order->get_shipping_state()] : '';
+
+        $receiptShortcodes = ResultsHelper::getReceiptShortcodesOrder($settings, $order->get_id());
+
+        $cart = new Cart();
+
+        if ($customerId) {
+            $cartScannerActions = new CartScannerActions();
+
+            $taxAddress = $cartScannerActions->getTaxAddress(array(
+                "address" => array(
+                    "billing_country" => $order->get_billing_country(),
+                    "billing_state" => $order->get_billing_state(),
+                    "billing_city" => $order->get_billing_city(),
+                    "billing_postcode" => $order->get_billing_postcode(),
+                    "shipping_country" => $order->get_shipping_country(),
+                    "shipping_state" => $order->get_shipping_state(),
+                    "shipping_city" => $order->get_shipping_city(),
+                    "shipping_postcode" => $order->get_shipping_postcode(),
+                    "shipping_as_billing" => 0
+                )
+            ));
+
+            $shippingMethods = $cart->getShippingMethods($customerId, $taxAddress);
+        }
+        else {
+            $userId = get_current_user_id();
+            $shippingMethods = $cart->getShippingMethods($userId, array());
+        }
+
+        $shipping_method = "";
+
+        foreach ($order->get_items('shipping') as $shipping_item) {
+            $method_id = $shipping_item->get_method_id();
+            if (!$method_id && $method_id != 0)
+                $method_id = "";
+
+            $instance_id = $shipping_item->get_instance_id();
+            if (!$instance_id)
+                $instance_id = 0;
+
+            $shipping_method = $method_id;
+        }
+
+        $payment_method = $order->get_payment_method();
+
+        $props = array(
+            "ID" => $order->get_id(),
+            "post_type" => $post->type ? $post->type : "shop_order",
+            "post_author" => "",
+            "data" => array(
+                "billing" => array(
+                    'first_name' => $order->get_billing_first_name(),
+                    'last_name' => $order->get_billing_last_name(),
+                    'company' => $order->get_billing_company(),
+                    'email' => $order->get_billing_email(),
+                    'phone' => $order->get_billing_phone(),
+                    'address_1' => $order->get_billing_address_1(),
+                    'address_2' => $order->get_billing_address_2(),
+                    'postcode' => $order->get_billing_postcode(),
+                    'city' => $order->get_billing_city(),
+                    'state' => $order->get_billing_state(),
+                    'state_name' => $bState,
+                    'country' => $order->get_billing_country(),
+                    'country_name' => $order->get_billing_country() ? WC()->countries->countries[$order->get_billing_country()] : "",
+                ),
+                "shipping" => array(
+                    'first_name' => $order->get_shipping_first_name(),
+                    'last_name' => $order->get_shipping_last_name(),
+                    'company' => $order->get_shipping_company(),
+                    'phone' => method_exists($order, 'get_shipping_phone') ? $order->get_shipping_phone() : "",
+                    'address_1' => $order->get_shipping_address_1(),
+                    'address_2' => $order->get_shipping_address_2(),
+                    'postcode' => $order->get_shipping_postcode(),
+                    'city' => $order->get_shipping_city(),
+                    'state' => $order->get_shipping_state(),
+                    'state_name' => $sState,
+                    'country' => $order->get_shipping_country(),
+                    'country_name' => $order->get_shipping_country() ? WC()->countries->countries[$order->get_shipping_country()] : "",
+                ),
+                "customer_note" => $order->get_customer_note(),
+                "total_tax" => $order->get_total_tax(),
+                "status" => $order->get_status(),
+                "status_name" => wc_get_order_status_name($order->get_status()),
+            ),
+            "order_date" => $order->get_date_created(),
+            "date_format" => $date_format,
+            "preview_date_format" => $previewDateFormat,
+            "usbs_fulfillment_objects" => OrdersHelper::get_meta_value($order, $post->ID, "usbs_fulfillment_objects"),
+            "usbs_order_fulfillment_data" => OrdersHelper::get_meta_value($order, $post->ID, "usbs_order_fulfillment_data"),
+            "user" => $userData,
+            "order_tax" => $order->get_total_tax(),
+            "order_tax_c" => wp_strip_all_tags(wc_price($order->get_total_tax())),
+            "order_subtotal" => $order->get_subtotal(),
+            "order_subtotal_c" => wp_strip_all_tags(wc_price($order->get_subtotal())),
+            "order_subtotal_taxes" => array_values($order_subtotal_taxes),
+            "order_subtotal_tax" => $order_subtotal_tax,
+            "order_subtotal_tax_c" => wp_strip_all_tags(wc_price($order_subtotal_tax)),
+            "order_shipping" => $order_shipping,
+            "order_shipping_c" => ResultsHelper::getFormattedPrice(wp_strip_all_tags(wc_price($order_shipping))),
+            "order_shipping_tax" => $order_shipping_tax,
+            "order_shipping_tax_c" => ResultsHelper::getFormattedPrice(wp_strip_all_tags(wc_price($order_shipping_tax))),
+            "order_shipping_name" => $order_shipping_name,
+            "order_shipping_title" => $order_shipping_title,
+            "order_payment" => $order_payment,
+            "order_payment_title" => $order_payment_title,
+            "additionalTaxes" => $additionalTaxes,
+            "order_total" => $order->get_total(),
+            "order_total_c" => ResultsHelper::getFormattedPrice(wp_strip_all_tags(wc_price($order->get_total()))),
+            "customer_id" => $customerId,
+            "customer_name" => trim($customerName),
+            "customer_country" => $customerCountry,
+            "products" => $sortOrderItemsByCategories == "on" && !in_array($page, array('history', 'orders_list')) ? ProductsHelper::sortProductsByCategories($products) : $products,
+            "currencySymbol" => $currencySymbol,
+            'currencyLabel' => $currencyLabel,
+            "postEditUrl" => admin_url('post.php?post=' . $post->ID) . '&action=edit',
+            "postPayUrl" => $order->get_checkout_payment_url(),
+            "updated" => time(),
+            "foundCounter" => OrdersHelper::get_meta_value($order, $post->ID, "usbs_found_counter"),
+            "fulfillment_user_name" => $fulfillment_user_name,
+            "fulfillment_user_email" => $fulfillment_user_email,
+            "fulfillment_user_id" => $fulfillment_user_id,
+            "discount" => $order->get_discount_total() ? wp_strip_all_tags($order->get_discount_to_display()) : "",
+            "coupons" => $order->get_coupon_codes(),
+            "shop" => ResultsHelper::getStoreData(),
+            "receiptShortcodes" => $receiptShortcodes,
+            "pickListTemplate" => !in_array($page, array('history', 'orders_list')) ? PickList::getTemplate($post, $order, $settings) : '',
+            "customer_orders_count" => 0,
+            "user_pending_orders_count" => ResultsHelper::get_user_pending_orders_count($customerId, $post->ID, $orderStatusesAreStillNotCompleted),
+            "refund_data" => OrdersHelper::getOrderRefundData($order),
+            "shippingMethods" => $shippingMethods,
+            "shipping_method" => $shipping_method,
+            "payment_method" => $payment_method,
+            "order_notes" => OrdersHelper::getOrderNotes($order),
+            "pos_data" => OrdersHelper::getPosData($order),
+            "current_edit_data" => $order->get_meta("_bs_user_edit_data"),
+        );
+
+        OrdersHelper::addOrderData($order->get_id(), $props);
+
+        Debug::addPoint(" - formatOrder order props");
+
+        if ($customerId) {
+            // @codingStandardsIgnoreStart
+            $customerOrders = $wpdb->get_row($wpdb->prepare(
+                "SELECT COUNT(O.id) AS 'count' FROM {$wpdb->prefix}wc_orders AS O WHERE O.customer_id = %d AND O.`type` = 'shop_order';",
+                $customerId
+            ));
+            // @codingStandardsIgnoreEnd
+
+            $props["customer_orders_count"] = $customerOrders ? $customerOrders->count : 0;
+        }
+
+        Debug::addPoint(" - formatOrder customer orders");
+
+        if ($fulfillmentField) {
+            $props[$fulfillmentField] = OrdersHelper::get_meta_value($order, $post->ID, $fulfillmentField);
+            $props[$fulfillmentField . "-filled"] = OrdersHelper::get_meta_value($order, $post->ID, $fulfillmentField . "-filled");
+        }
+
+        $props["_order_number"] = OrdersHelper::get_meta_value($order, $post->ID, "_order_number");
+        $props["_billing_address_index"] = str_replace("<br/>", ", ", $order->get_formatted_billing_address());
+        $props["_shipping_address_index"] = str_replace("<br/>", ", ", $order->get_formatted_shipping_address());
+        $props["ywot_tracking_code"] = OrdersHelper::get_meta_value($order, $post->ID, "ywot_tracking_code");
+
+        $props["_wc_shipment_tracking_items_list"] = array();
+        $wcShipmentTrackingItems = OrdersHelper::get_meta_value($order, $post->ID, "_wc_shipment_tracking_items");
+        $_wc_shipment_tracking_items = "";
+        if ($wcShipmentTrackingItems && is_array($wcShipmentTrackingItems)) {
+            foreach ($wcShipmentTrackingItems as $value) {
+                if (isset($value["tracking_number"])) {
+                    $_wc_shipment_tracking_items .= " " . $value["tracking_number"];
+                    $props["_wc_shipment_tracking_items_list"][] = $value;
+                }
+            }
+        }
+        $props["_wc_shipment_tracking_items"] = trim($_wc_shipment_tracking_items);
+
+        $aftershipTrackingItems = OrdersHelper::get_meta_value($order, $post->ID, "_aftership_tracking_items");
+        $_aftership_tracking_items = "";
+        if ($aftershipTrackingItems && is_array($aftershipTrackingItems)) {
+            foreach ($aftershipTrackingItems as $value) {
+                if (isset($value["tracking_number"]))
+                    $_aftership_tracking_items .= " " . $value["tracking_number"];
+            }
+        }
+        $props["_aftership_tracking_items"] = trim($_aftership_tracking_items);
+
+        try {
+            foreach (InterfaceData::getFields(true, "", false, Users::userRole()) as $value) {
+                if (!$value['field_name'] && !in_array($value['position'], array('before-product', 'before-product-right', 'after-product', 'after-product-right'))) {
+                    continue;
+                }
+
+                $filterName = str_replace("%field", $value['field_name'], "barcode_scanner_%field_get_after");
+                $defaultValue = OrdersHelper::get_meta_value($order, $post->ID, $value['field_name']);
+
+                $props[$value['field_name']] = $defaultValue;
+
+            }
+        } catch (\Throwable $th) {
+        }
+
+        foreach ($additionalFields as $key => $value) {
+            $props[$key] = $value;
+        }
+
+        Debug::addPoint(" - formatOrder custom fields");
+
+        return $props;
+    }
+
+    private static function assignOrderListProps($post, $order, $additionalFields = array(), $page = '')
+    {
+        $customerId = $order->get_customer_id();
+        $user = $order->get_user();
+
+        if ($customerId && $user) {
+            $user = $user->data;
+        }
+
+        $orderDate = new \DateTime($order->get_date_created());
+        $date_format = $order->get_date_created();
+        $date_format->setTimezone(new \DateTimeZone(\wp_timezone_string()));
+        $date_format = $date_format->format("Y-m-d H:i:s");
+
+
+        $customerName = $order->get_billing_first_name() . " " . $order->get_billing_last_name();
+        $customerName = trim($customerName);
+        $previewDateFormat = $orderDate->format("M j, Y");
+        $previewDateFormat = SettingsHelper::dateTranslate($previewDateFormat);
+
+        if (!$customerName && $customerId) {
+            $customerName = get_user_meta($customerId, 'first_name', true) . ' ' . get_user_meta($customerId, 'last_name', true);
+        }
+
+        $user = $order->get_user();
+        $userData = null;
+
+        if ($customerId && $user) {
+            $userData = $user->data;
+            $userData->avatar = @get_avatar_url($customerId);
+        }
+
+        $products = array();
+
+        foreach ($order->get_items("line_item") as $item) {
+            $products[] = array('item_id' => $item->get_id());
+        }
+
+        $settings = new Settings();
+
+        $fulfillmentField = $settings->getSettings("orderFulFillmentField");
+        $fulfillmentField = $fulfillmentField === null ? "" : $fulfillmentField->value;
+
+        $props = array(
+            "ID" => $order->get_id(),
+            "post_type" => $post->type ? $post->type : "shop_order",
+            "post_author" => "",
+            "data" => array(
+                "status" => $order->get_status(),
+                "status_name" => wc_get_order_status_name($order->get_status()),
+            ),
+            "order_date" => $order->get_date_created(),
+            "date_format" => $date_format,
+            "preview_date_format" => $previewDateFormat,
+            "usbs_fulfillment_objects" => OrdersHelper::get_meta_value($order, $post->ID, "usbs_fulfillment_objects"),
+            "usbs_order_fulfillment_data" => OrdersHelper::get_meta_value($order, $post->ID, "usbs_order_fulfillment_data"),
+            "order_total" => $order->get_total(),
+            "order_total_c" => wp_strip_all_tags(wc_price($order->get_total())),
+            "customer_name" => trim($customerName),
+            "total_products" => count($order->get_items("line_item")),
+            "current_edit_data" => $order->get_meta("_bs_user_edit_data"),
+            "updated" => time(),
+            "customer_orders_count" => 0,
+            "user" => $userData,
+            "products" => $products,
+        );
+
+        OrdersHelper::addOrderData($order->get_id(), $props);
+
+        if ($fulfillmentField) {
+            $props[$fulfillmentField] = OrdersHelper::get_meta_value($order, $post->ID, $fulfillmentField);
+            $props[$fulfillmentField . "-filled"] = OrdersHelper::get_meta_value($order, $post->ID, $fulfillmentField . "-filled");
+        }
+
+        $props["_order_number"] = OrdersHelper::get_meta_value($order, $post->ID, "_order_number");
+
+        return $props;
+    }
+
+    private static function clearPrice($price, $args = array())
+    {
+        $price = trim(wp_strip_all_tags(wc_price($price, $args)));
+        $price = str_replace("&nbsp;", "", $price);
+
+        return $price;
+    }
+}

@@ -1,0 +1,1171 @@
+<?php
+/**
+ * BrikPanel - Global Admin Top Bar
+ *
+ * Replaces the WordPress admin bar across the entire WordPress admin with an
+ * e-commerce focused top bar (live KPIs, global search, quick-create,
+ * order notifications, user menu).
+ *
+ * @package BrikPanel
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+class Brikpanel_Dashboard_Topbar {
+
+    const OPTION_KEY   = 'brikpanel_dashboard_topbar';
+    const NONCE_ACTION = 'brikpanel_topbar_nonce';
+
+    /** Cached notification-bell counts, see get_notification_counts() and brikpanel_flush_topbar_counts(). */
+    const COUNTS_TRANSIENT = 'brikpanel_topbar_counts';
+    const COUNTS_TTL       = MINUTE_IN_SECONDS;
+    /** The bell's "New customers today" number, kept apart (new_customers_today()). */
+    const NEW_CUSTOMERS_TRANSIENT = 'brikpanel_topbar_new_customers';
+
+    private static $instance = null;
+
+    public static function instance() {
+        if ( self::$instance === null ) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    private function __construct() {
+        if ( ! $this->is_enabled() ) {
+            return;
+        }
+        // Mark <html> and <body> so our CSS can offset the admin layout and
+        // hide the native WP admin bar.
+        add_filter( 'admin_body_class', [ $this, 'add_body_class' ] );
+        add_action( 'admin_head',       [ $this, 'print_html_class_script' ], 0 );
+
+        // Render the topbar at the very top of every admin page, before the
+        // main #wpbody-content block.
+        add_action( 'in_admin_header', [ $this, 'render' ] );
+
+        // Enqueue topbar assets on every admin page.
+        add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_assets' ] );
+
+        // AJAX endpoint for live topbar stats.
+        add_action( 'wp_ajax_brikpanel_topbar_stats', [ $this, 'ajax_stats' ] );
+
+        // AJAX endpoint that remembers the per-user "hide sidebar" choice.
+        add_action( 'wp_ajax_brikpanel_topbar_sidebar_state', [ $this, 'ajax_sidebar_state' ] );
+    }
+
+    /** User meta holding the per-user "hide sidebar" choice ('yes' or absent). */
+    const SIDEBAR_HIDDEN_META = 'brikpanel_sidebar_hidden';
+
+    /** Short-lived cookie bridging a toggle and its AJAX save, see sidebar_starts_hidden(). */
+    const SIDEBAR_STATE_COOKIE = 'brikpanel_sidebar_state';
+
+    /**
+     * Whether the desktop sidebar should start hidden for the current user.
+     *
+     * The saved choice only counts while the toggle button is on screen for
+     * this user: if the owner hides the button (or its audience rule excludes
+     * this role), the user would otherwise be left with no sidebar and no way
+     * to bring it back.
+     *
+     * @return bool
+     */
+    private function sidebar_starts_hidden() {
+        if ( ! $this->sidebar_toggle_visible() ) {
+            return false;
+        }
+        $user_id = get_current_user_id();
+
+        // The toggle also writes a short-lived "<user id>:yes|no" cookie. It
+        // rides along with the very next page request, while the AJAX save may
+        // still be in flight; without it a quick toggle-then-navigate renders
+        // the previous state. A display hint only, so reading it is harmless.
+        if ( isset( $_COOKIE[ self::SIDEBAR_STATE_COOKIE ] ) ) {
+            $cookie = sanitize_text_field( wp_unslash( $_COOKIE[ self::SIDEBAR_STATE_COOKIE ] ) );
+            if ( preg_match( '/^(\d+):(yes|no)$/', $cookie, $m ) && (int) $m[1] === $user_id ) {
+                return $m[2] === 'yes';
+            }
+        }
+
+        return get_user_meta( $user_id, self::SIDEBAR_HIDDEN_META, true ) === 'yes';
+    }
+
+    /** @return bool */
+    private function sidebar_toggle_visible() {
+        return ! function_exists( 'brikpanel_topbar_item_is_visible' ) || brikpanel_topbar_item_is_visible( 'sidebar_toggle' );
+    }
+
+
+    // =========================================================================
+    // GATING
+    // =========================================================================
+
+    public static function is_enabled() {
+        return get_option( self::OPTION_KEY, 'yes' ) === 'yes';
+    }
+
+    /**
+     * Whether this bar is the one being drawn on the current request — the
+     * setting is on AND the screen is one we render on.
+     *
+     * Public because third parties (and our own native admin-bar fallback in
+     * brikpanel-topbar-items.php) need to know which bar is on screen before
+     * deciding where to put a control. `is_enabled()` alone is not that answer:
+     * it only reports the setting, while the bar deliberately stands down on
+     * block-editor screens, the site editor, Desktop Mode and so on.
+     *
+     * Deliberately not memoized: the answer depends on the current screen, and
+     * an early caller (before `set_current_screen()`) would otherwise freeze a
+     * wrong value for the rest of the request. The checks behind it are option
+     * reads and cheap screen lookups.
+     *
+     * @return bool
+     */
+    public static function is_rendering() {
+        // instance() is safe even when the feature is switched off: the
+        // constructor simply skips hooking anything in that case.
+        return self::is_enabled() && self::instance()->should_render();
+    }
+
+    /**
+     * Decide whether the topbar should render on the current admin request.
+     * We intentionally skip block-editor screens (Gutenberg post/page editor,
+     * site editor, navigation editor, widgets editor) because Gutenberg takes
+     * over the admin chrome with its own toolbar + fullscreen mode, and our
+     * fixed topbar would overlay its header and break its layout math (the
+     * `interface-interface-skeleton__html-container` class on <html> assumes
+     * no extra top padding). Also skipped: AJAX / customizer requests where
+     * there's no visible admin layout.
+     */
+    private function should_render() {
+        if ( ! is_admin() ) {
+            return false;
+        }
+        if ( wp_doing_ajax() ) {
+            return false;
+        }
+        // Under the Desktop Mode shell, the window title bar + shell admin
+        // bar already provide what our top bar offers; rendering it would
+        // duplicate chrome inside every window and offset the layout. Stand
+        // down (see includes/brikpanel-desktop-mode-compat.php).
+        if ( function_exists( 'brikpanel_is_desktop_mode' ) && brikpanel_is_desktop_mode() ) {
+            return false;
+        }
+        // Network Admin and User Admin are not per-site contexts — the topbar
+        // would show the main blog's site name, link to a subsite-scoped
+        // dashboard, and overlay the super-admin chrome. Stay out of those
+        // contexts entirely.
+        if ( is_network_admin() || is_user_admin() ) {
+            return false;
+        }
+        if ( ! current_user_can( 'manage_woocommerce' ) && ! current_user_can( 'manage_options' ) ) {
+            return false;
+        }
+
+        // Site editor (full-site editing). Its own page slug, not a screen
+        // we can detect via `is_block_editor()` reliably, so gate on $pagenow.
+        global $pagenow;
+        if ( isset( $pagenow ) && in_array( $pagenow, [ 'site-editor.php', 'customize.php' ], true ) ) {
+            return false;
+        }
+
+        // Block editor screens — covers post.php / post-new.php when the
+        // post type uses Gutenberg, the widgets block editor, and the
+        // navigation editor. Falls back to false on legacy classic-editor
+        // screens (where we still want the topbar to appear).
+        $screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+        if ( $screen && method_exists( $screen, 'is_block_editor' ) && $screen->is_block_editor() ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    // =========================================================================
+    // BODY CLASSES & HTML CLASS (for CSS layout offsets)
+    // =========================================================================
+
+    public function add_body_class( $classes ) {
+        if ( $this->should_render() ) {
+            $classes .= ' brikpanel-has-topbar';
+            // Printed by the server so a hidden sidebar never flashes in on load.
+            // The CSS only honours it above the 960px off-canvas breakpoint.
+            if ( $this->sidebar_starts_hidden() ) {
+                $classes .= ' brikpanel-sidebar-hidden';
+            }
+        }
+        return $classes;
+    }
+
+    /**
+     * Tag <html> with the same marker class so we can adjust padding-top on
+     * the root element (the native admin-bar relies on `.wp-toolbar` for the
+     * same thing — we mirror the pattern).
+     */
+    public function print_html_class_script() {
+        if ( ! $this->should_render() ) {
+            return;
+        }
+        echo '<script>document.documentElement.classList.add("brikpanel-has-topbar");</script>';
+    }
+
+    // =========================================================================
+    // ASSET ENQUEUE
+    // =========================================================================
+
+    public function enqueue_assets() {
+        if ( ! $this->should_render() ) {
+            return;
+        }
+
+        // filemtime-suffixed versions so any edit to the topbar assets busts the
+        // browser cache immediately, even between releases (BRIKPANEL_VERSION
+        // alone serves a stale copy whenever the file changes without a bump).
+        $topbar_css_ver = @filemtime( BRIKPANEL_PATH . 'front-end/topbar/brikpanel-topbar.css' ) ?: BRIKPANEL_VERSION;
+        $topbar_js_ver  = @filemtime( BRIKPANEL_PATH . 'front-end/topbar/brikpanel-topbar.js' ) ?: BRIKPANEL_VERSION;
+
+        wp_enqueue_style(
+            'brikpanel_topbar_styles',
+            BRIKPANEL_URL . 'front-end/topbar/brikpanel-topbar.css',
+            [],
+            $topbar_css_ver
+        );
+
+        wp_enqueue_script(
+            'brikpanel_topbar_scripts',
+            BRIKPANEL_URL . 'front-end/topbar/brikpanel-topbar.js',
+            function_exists( 'brikpanel_narrow_dep' ) ? brikpanel_narrow_dep( 'format' ) : [],
+            $topbar_js_ver,
+            true
+        );
+
+        wp_localize_script( 'brikpanel_topbar_scripts', 'brikpanelTopbar', [
+            'ajax_url'        => admin_url( 'admin-ajax.php' ),
+            'nonce'           => wp_create_nonce( self::NONCE_ACTION ),
+            'cache_nonce'     => class_exists( 'Brikpanel_Cache_Clear' ) ? wp_create_nonce( Brikpanel_Cache_Clear::NONCE_ACTION ) : '',
+            'cache_action'    => class_exists( 'Brikpanel_Cache_Clear' ) ? Brikpanel_Cache_Clear::AJAX_ACTION : '',
+            // Where LiteSpeed is asked to send a background purge back to: a
+            // core image, so no admin page renders for it, and landing there
+            // proves LiteSpeed accepted the purge (brikpanel-topbar.js).
+            'cache_beacon'    => (string) wp_parse_url( includes_url( 'images/blank.gif' ), PHP_URL_PATH ),
+            // "Hide third-party admin notices" (on by default). Off, the bell's
+            // sweep leaves foreign notices on the page, as the setting promises.
+            'hide_foreign'    => get_option( 'brikpanel_hide_foreign_notices', 'yes' ) === 'yes',
+            // When on, red error notices are collected into the bell too instead
+            // of staying on screen (off by default).
+            'hide_errors'     => get_option( 'brikpanel_hide_error_notices', 'no' ) === 'yes',
+            'sidebar_toggle'  => $this->sidebar_toggle_visible(),
+            'sidebar_cookie'  => [
+                'name' => self::SIDEBAR_STATE_COOKIE,
+                'path' => (string) wp_parse_url( admin_url(), PHP_URL_PATH ),
+                'user' => get_current_user_id(),
+            ],
+            'i18n'            => [
+                'hide_sidebar'   => __( 'Hide sidebar', 'brikpanel' ),
+                'show_sidebar'   => __( 'Show sidebar', 'brikpanel' ),
+                'toggle_nav'     => __( 'Toggle navigation', 'brikpanel' ),
+                'cache_clearing' => __( 'Clearing cache…', 'brikpanel' ),
+                'cache_failed'   => __( 'Cache could not be cleared.', 'brikpanel' ),
+                /* translators: %s: what was purged, a cache plugin or one of LiteSpeed's purge options (e.g. "CSS/JS Cache") */
+                'cache_type_purged' => __( '%s purged.', 'brikpanel' ),
+                'cache_retry'    => __( 'Could not clear. Reload the page and try again.', 'brikpanel' ),
+                'close'          => __( 'Close', 'brikpanel' ),
+            ],
+        ] );
+    }
+
+    // =========================================================================
+    // RENDER TOPBAR MARKUP
+    // =========================================================================
+
+    public function render() {
+        if ( ! $this->should_render() ) {
+            return;
+        }
+
+        $site_name    = get_bloginfo( 'name' );
+        $site_url     = home_url( '/' );
+        $current_user = wp_get_current_user();
+        $avatar_url   = get_avatar_url( $current_user->ID, [ 'size' => 64 ] );
+        $display_name = $current_user->display_name ?: $current_user->user_login;
+        $profile_url  = admin_url( 'profile.php' );
+        $logout_url   = wp_logout_url( admin_url() );
+
+        // Custom brand logo overrides the default BrikPanel mark when the
+        // store owner has uploaded one and flipped the Appearance toggle. Helper
+        // lives in front-end/appearance/brikpanel-appearance.php (always loaded).
+        $brand_logo_url = function_exists( 'brikpanel_brand_logo_get_url' ) ? brikpanel_brand_logo_get_url() : '';
+        $has_brand_logo = $brand_logo_url !== '';
+        $icon_url       = $has_brand_logo ? $brand_logo_url : BRIKPANEL_URL . 'assets/icon.png';
+        $mark_class     = $has_brand_logo ? 'brikpanel-topbar-brand-mark has-custom-logo' : 'brikpanel-topbar-brand-mark';
+
+        // Slots for items other plugins registered through the
+        // `brikpanel_topbar_items` filter. Every built-in control exposes a
+        // "before" and an "after" slot; the final `flush` per side emits
+        // anything still unplaced. Guarded so a missing module file degrades to
+        // a bar without third-party items instead of a fatal (see
+        // brikpanel_require() in brikpanel.php).
+        $slot = static function ( $position, $relation = 'flush', $anchor = '' ) {
+            if ( function_exists( 'brikpanel_topbar_render_slot' ) ) {
+                brikpanel_topbar_render_slot( $position, $relation, $anchor );
+            }
+        };
+
+        ?>
+        <header class="brikpanel-topbar" id="brikpanel-topbar" role="banner">
+            <div class="brikpanel-topbar-inner">
+
+                <!-- ========== LEFT ========== -->
+                <div class="brikpanel-topbar-left">
+                    <!-- Sidebar toggle. Above 960px it hides / shows the desktop
+                         sidebar (remembered per user); at 960px and below it is
+                         the off-canvas hamburger, which replaces the
+                         #wp-admin-bar-menu-toggle of the now-hidden WP admin bar.
+                         The hamburger is always rendered there, since it is the
+                         only way to reach the menu on small screens. -->
+                    <?php
+                    $brikpanel_sidebar_hidden = $this->sidebar_starts_hidden();
+                    $brikpanel_toggle_class   = 'brikpanel-topbar-menu-btn' . ( $this->sidebar_toggle_visible() ? '' : ' is-desktop-off' );
+                    ?>
+                    <?php $slot( 'left', 'before', 'sidebar_toggle' ); ?>
+                    <button type="button" class="<?php echo esc_attr( $brikpanel_toggle_class ); ?>" id="brikpanel-topbar-menu-btn" aria-controls="adminmenuwrap" aria-label="<?php echo esc_attr( $brikpanel_sidebar_hidden ? __( 'Show sidebar', 'brikpanel' ) : __( 'Hide sidebar', 'brikpanel' ) ); ?>" aria-expanded="<?php echo $brikpanel_sidebar_hidden ? 'false' : 'true'; ?>" aria-keyshortcuts="[">
+                        <svg class="brikpanel-topbar-menu-icon-bars" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                        <svg class="brikpanel-topbar-menu-icon-panel" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9" y1="4" x2="9" y2="20"/><polyline class="brikpanel-topbar-menu-chev-close" points="16 9.5 13.5 12 16 14.5"/><polyline class="brikpanel-topbar-menu-chev-open" points="13.5 9.5 16 12 13.5 14.5"/></svg>
+                    </button>
+                    <?php $slot( 'left', 'after', 'sidebar_toggle' ); ?>
+
+                    <?php $slot( 'left', 'before', 'brand' ); ?>
+
+                    <?php
+                    if ( brikpanel_topbar_item_is_visible( 'brand' ) ) :
+                        // The logo leads to the BrikPanel dashboard, a page registered
+                        // with `manage_woocommerce`. The bar is also drawn for
+                        // `manage_options` holders without it, and for them that link
+                        // answered 403, so they land on the WordPress dashboard. The
+                        // same happens while the BrikPanel dashboard is switched off.
+                        $brikpanel_brand_to_dashboard = function_exists( 'brikpanel_module_available' )
+                            ? brikpanel_module_available( 'brikpanel-dashboard' )
+                            : current_user_can( 'manage_woocommerce' );
+                        ?>
+                    <a class="brikpanel-topbar-brand" href="<?php echo esc_url( $brikpanel_brand_to_dashboard ? admin_url( 'admin.php?page=brikpanel-dashboard' ) : admin_url() ); ?>" aria-label="<?php echo esc_attr( $brikpanel_brand_to_dashboard ? __( 'BrikPanel dashboard', 'brikpanel' ) : __( 'Dashboard', 'brikpanel' ) ); ?>">
+                        <span class="<?php echo esc_attr( $mark_class ); ?>" aria-hidden="true">
+                            <img src="<?php echo esc_url( $icon_url ); ?>" alt="" width="32" height="32">
+                        </span>
+                        <span class="brikpanel-topbar-brand-text">
+                            <span class="brikpanel-topbar-brand-name"><?php echo esc_html( $site_name ); ?></span>
+                            <span class="brikpanel-topbar-brand-sub"><?php esc_html_e( 'Admin', 'brikpanel' ); ?></span>
+                        </span>
+                    </a>
+                    <?php endif; ?>
+
+                    <?php $slot( 'left', 'after', 'brand' ); ?>
+                    <?php $slot( 'left', 'before', 'live' ); ?>
+
+                    <?php
+                    // The count arrives through ajax_stats(), which requires
+                    // `manage_woocommerce`. Without it the pill could only ever read 0.
+                    if ( brikpanel_topbar_item_is_visible( 'live' ) && current_user_can( 'manage_woocommerce' ) ) :
+                        ?>
+                    <span class="brikpanel-topbar-live-pill is-empty" id="brikpanel-topbar-live" title="<?php esc_attr_e( 'Live visitors right now', 'brikpanel' ); ?>">
+                        <span class="brikpanel-topbar-live-dot"></span>
+                        <span class="brikpanel-topbar-live-count" id="brikpanel-topbar-live-count">0</span>
+                        <span class="brikpanel-topbar-live-label"><?php esc_html_e( 'live', 'brikpanel' ); ?></span>
+                    </span>
+                    <?php endif; ?>
+
+                    <?php $slot( 'left', 'after', 'live' ); ?>
+
+                    <?php $this->render_coming_soon_badge(); ?>
+
+                    <?php $slot( 'left' ); ?>
+                </div>
+
+                <!-- ========== RIGHT ========== -->
+                <div class="brikpanel-topbar-right">
+
+                    <?php $slot( 'right', 'before', 'search' ); ?>
+
+                    <!-- Search trigger (opens the existing brikpanel-search overlay) -->
+                    <?php
+                    // Only where the palette itself is loaded: same gate as its assets,
+                    // its toolbar trigger and its AJAX. Otherwise the button opened nothing.
+                    if ( brikpanel_topbar_item_is_visible( 'search' )
+                        && class_exists( 'Brikpanel_Pro_Search' )
+                        && Brikpanel_Pro_Search::user_can_search() ) :
+                        ?>
+                    <button type="button" class="brikpanel-topbar-search-btn" id="brikpanel-topbar-search" aria-label="<?php esc_attr_e( 'Search orders', 'brikpanel' ); ?>">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <span class="brikpanel-topbar-search-text"><?php esc_html_e( 'Search', 'brikpanel' ); ?></span>
+                        <span class="brikpanel-topbar-kbd"><span class="brikpanel-topbar-kbd-key" id="brikpanel-topbar-kbd-mod">Ctrl</span><span>+</span><span class="brikpanel-topbar-kbd-key">K</span></span>
+                    </button>
+                    <?php endif; ?>
+
+                    <?php $slot( 'right', 'after', 'search' ); ?>
+                    <?php $slot( 'right', 'before', 'create' ); ?>
+
+                    <!-- Quick create -->
+                    <?php if ( brikpanel_topbar_item_is_visible( 'create' ) && brikpanel_topbar_has_visible_create_items() ) : ?>
+                    <div class="brikpanel-topbar-menu" data-topbar-menu="create">
+                        <button type="button" class="brikpanel-topbar-btn brikpanel-topbar-btn-primary" data-topbar-toggle="create" aria-haspopup="menu" aria-expanded="false">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            <span class="brikpanel-topbar-btn-label"><?php esc_html_e( 'Create', 'brikpanel' ); ?></span>
+                        </button>
+                        <div class="brikpanel-topbar-dropdown" role="menu">
+                            <?php if ( brikpanel_topbar_create_item_is_visible( 'product' ) ) : ?>
+                            <a class="brikpanel-topbar-dropdown-item" role="menuitem" href="<?php echo esc_url( brikpanel_topbar_create_item_url( 'product' ) ); ?>">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7l-8-4-8 4 8 4 8-4z"/><path d="M4 7v10l8 4 8-4V7"/><line x1="12" y1="11" x2="12" y2="21"/></svg>
+                                <span><?php esc_html_e( 'New product', 'brikpanel' ); ?></span>
+                            </a>
+                            <?php endif; ?>
+                            <?php if ( brikpanel_topbar_create_item_is_visible( 'order' ) ) : ?>
+                            <a class="brikpanel-topbar-dropdown-item" role="menuitem" href="<?php echo esc_url( brikpanel_topbar_create_item_url( 'order' ) ); ?>">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2l1 4h10l1-4"/><path d="M5 6h14l-1 15H6L5 6z"/><path d="M9 10v6"/><path d="M15 10v6"/></svg>
+                                <span><?php esc_html_e( 'New order', 'brikpanel' ); ?></span>
+                            </a>
+                            <?php endif; ?>
+                            <?php if ( brikpanel_topbar_create_item_is_visible( 'coupon' ) ) : ?>
+                            <a class="brikpanel-topbar-dropdown-item" role="menuitem" href="<?php echo esc_url( brikpanel_topbar_create_item_url( 'coupon' ) ); ?>">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a2 2 0 0 1 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v4a2 2 0 0 1 2 2 2 2 0 0 1-2 2v4a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-4a2 2 0 0 1-2-2z"/><line x1="9" y1="9" x2="15" y2="15"/><circle cx="9" cy="9" r=".6"/><circle cx="15" cy="15" r=".6"/></svg>
+                                <span><?php esc_html_e( 'New coupon', 'brikpanel' ); ?></span>
+                            </a>
+                            <?php endif; ?>
+                            <?php if ( brikpanel_topbar_create_item_is_visible( 'cart_link' ) ) : ?>
+                            <a class="brikpanel-topbar-dropdown-item" role="menuitem" href="<?php echo esc_url( brikpanel_topbar_create_item_url( 'cart_link' ) ); ?>">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                                <span><?php esc_html_e( 'Cart share link', 'brikpanel' ); ?></span>
+                            </a>
+                            <?php endif; ?>
+                            <?php if ( brikpanel_topbar_create_item_is_visible( 'post' ) ) : ?>
+                            <a class="brikpanel-topbar-dropdown-item" role="menuitem" href="<?php echo esc_url( brikpanel_topbar_create_item_url( 'post' ) ); ?>">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                                <span><?php esc_html_e( 'New post', 'brikpanel' ); ?></span>
+                            </a>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
+                    <?php $slot( 'right', 'after', 'create' ); ?>
+                    <?php $slot( 'right', 'before', 'phone_app' ); ?>
+                    <?php
+                    // The phone app button (front-end/push/brikpanel-push-admin.php): on a
+                    // phone only, until notifications are on there. Absent with the phone
+                    // app off (BRIKPANEL_PHONE_APP).
+                    if ( function_exists( 'brikpanel_push_menu_render' ) ) {
+                        brikpanel_push_menu_render();
+                    }
+                    ?>
+                    <?php $slot( 'right', 'after', 'phone_app' ); ?>
+                    <?php $slot( 'right', 'before', 'notifications' ); ?>
+
+                    <!-- Notifications -->
+                    <?php
+                    // Each row links to a screen with its own capability, and every
+                    // number comes from ajax_stats(), which requires
+                    // `manage_woocommerce`. A row is only drawn when its screen opens
+                    // for this user, and the bell only when its numbers can load and
+                    // at least one row is left. Without this a `manage_options`-only
+                    // role got a bell of 403 links whose counts never arrived.
+                    $brikpanel_order_type     = get_post_type_object( 'shop_order' );
+                    $brikpanel_bell_orders    = $brikpanel_order_type && current_user_can( $brikpanel_order_type->cap->edit_posts );
+                    $brikpanel_bell_oos       = current_user_can( 'edit_products' );
+                    // "New customers today" opens the Customers list on the same rule
+                    // its count uses: customers whose first paid order is today.
+                    // Without the Customers page (a third party removed it), the old
+                    // targets: WooCommerce's report, or the Users list when its
+                    // Analytics is off (brikpanel_wc_analytics_enabled() explains how
+                    // "off" is read on each WooCommerce release).
+                    $brikpanel_analytics_on   = function_exists( 'brikpanel_wc_analytics_enabled' ) && brikpanel_wc_analytics_enabled();
+                    if ( class_exists( 'Brikpanel_Customers' ) ) {
+                        $brikpanel_bell_customers = current_user_can( 'manage_woocommerce' );
+                        $brikpanel_customers_url  = Brikpanel_Customers::url( 'all', [ 'preset' => 'new_today' ] );
+                    } else {
+                        $brikpanel_bell_customers = current_user_can( $brikpanel_analytics_on ? 'view_woocommerce_reports' : 'list_users' );
+                        $brikpanel_customers_url  = $brikpanel_analytics_on
+                            ? admin_url( 'admin.php?page=wc-admin&path=/customers' )
+                            : admin_url( 'users.php?role=customer' );
+                    }
+                    // With "Block pages hidden from the menu" on, a row whose screen the
+                    // Navigation rules close for this user would only open the
+                    // "not available" card, so it is left out like a 403 row.
+                    if ( function_exists( 'brikpanel_nav_url_blocked_for_current_user' ) ) {
+                        $brikpanel_bell_orders    = $brikpanel_bell_orders && ! brikpanel_nav_url_blocked_for_current_user( brikpanel_wc_orders_list_url( 'processing' ) );
+                        $brikpanel_bell_oos       = $brikpanel_bell_oos && ! brikpanel_nav_url_blocked_for_current_user( brikpanel_out_of_stock_url() );
+                        $brikpanel_bell_customers = $brikpanel_bell_customers && ! brikpanel_nav_url_blocked_for_current_user( $brikpanel_customers_url );
+                    }
+                    $brikpanel_show_bell      = brikpanel_topbar_item_is_visible( 'notifications' )
+                        && current_user_can( 'manage_woocommerce' )
+                        && ( $brikpanel_bell_orders || $brikpanel_bell_oos || $brikpanel_bell_customers );
+                    ?>
+                    <?php if ( $brikpanel_show_bell ) : ?>
+                    <div class="brikpanel-topbar-menu" data-topbar-menu="notifications">
+                        <button type="button" class="brikpanel-topbar-icon-btn" data-topbar-toggle="notifications" aria-haspopup="menu" aria-expanded="false" aria-label="<?php esc_attr_e( 'Order notifications', 'brikpanel' ); ?>">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+                            <?php
+                            // The badge adds up the three order rows only, so it has
+                            // nothing to say to a user who cannot see them.
+                            if ( $brikpanel_bell_orders ) :
+                                ?>
+                            <span class="brikpanel-topbar-badge" id="brikpanel-topbar-notif-badge" hidden>0</span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="brikpanel-topbar-dropdown brikpanel-topbar-dropdown-wide" role="menu">
+                            <div class="brikpanel-topbar-dropdown-header">
+                                <span><?php esc_html_e( 'Needs attention', 'brikpanel' ); ?></span>
+                            </div>
+                            <?php
+                            if ( $brikpanel_bell_orders ) :
+                                // The orders list this store really has, filtered to the
+                                // counted status: `wc-orders` exists only with HPOS, and
+                                // the posts list reads `post_status`, not `status`.
+                                ?>
+                            <a class="brikpanel-topbar-dropdown-row" role="menuitem" href="<?php echo esc_url( brikpanel_wc_orders_list_url( 'processing' ) ); ?>">
+                                <span class="brikpanel-topbar-dropdown-row-label"><?php esc_html_e( 'Processing orders', 'brikpanel' ); ?></span>
+                                <span class="brikpanel-topbar-dropdown-row-count" id="brikpanel-topbar-notif-processing">0</span>
+                            </a>
+                            <a class="brikpanel-topbar-dropdown-row" role="menuitem" href="<?php echo esc_url( brikpanel_wc_orders_list_url( 'pending' ) ); ?>">
+                                <span class="brikpanel-topbar-dropdown-row-label"><?php esc_html_e( 'Pending payment', 'brikpanel' ); ?></span>
+                                <span class="brikpanel-topbar-dropdown-row-count" id="brikpanel-topbar-notif-pending">0</span>
+                            </a>
+                            <a class="brikpanel-topbar-dropdown-row" role="menuitem" href="<?php echo esc_url( brikpanel_wc_orders_list_url( 'on-hold' ) ); ?>">
+                                <span class="brikpanel-topbar-dropdown-row-label"><?php esc_html_e( 'On hold', 'brikpanel' ); ?></span>
+                                <span class="brikpanel-topbar-dropdown-row-count" id="brikpanel-topbar-notif-onhold">0</span>
+                            </a>
+                            <?php endif; ?>
+                            <?php
+                            if ( $brikpanel_bell_oos ) :
+                                // The count only ever measures *published* out-of-stock
+                                // products, so the link must land on exactly that filtered
+                                // view — otherwise the number in the bell and the number of
+                                // rows on the target screen disagree. When the modern
+                                // products list is active we can express both filters in its
+                                // own URL params; otherwise fall back to the native list,
+                                // which understands `stock_status` but has no matching
+                                // "published only" filter beyond `post_status`.
+                                $brikpanel_oos_url = brikpanel_out_of_stock_url();
+                                ?>
+                            <a class="brikpanel-topbar-dropdown-row" role="menuitem" href="<?php echo esc_url( $brikpanel_oos_url ); ?>">
+                                <span class="brikpanel-topbar-dropdown-row-label"><?php esc_html_e( 'Out of stock', 'brikpanel' ); ?></span>
+                                <span class="brikpanel-topbar-dropdown-row-count" id="brikpanel-topbar-notif-oos">0</span>
+                            </a>
+                            <?php endif; ?>
+                            <?php if ( $brikpanel_bell_customers ) : ?>
+                            <a class="brikpanel-topbar-dropdown-row" role="menuitem" href="<?php echo esc_url( $brikpanel_customers_url ); ?>">
+                                <span class="brikpanel-topbar-dropdown-row-label"><?php esc_html_e( 'New customers today', 'brikpanel' ); ?></span>
+                                <span class="brikpanel-topbar-dropdown-row-count" id="brikpanel-topbar-notif-customers">0</span>
+                            </a>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
+                    <?php $slot( 'right', 'after', 'notifications' ); ?>
+                    <?php $slot( 'right', 'before', 'hidden_notices' ); ?>
+
+                    <!-- Hidden third-party notices. Always in its place while
+                         "Hide third-party admin notices" is on, muted while the
+                         page has none: it used to appear only on pages with
+                         notices, and the 40px it took pushed search, Create and
+                         the order bell left from one page to the next (field
+                         test D19). With the setting off nothing is ever
+                         collected, so there is no button at all. Has its own
+                         top bar item ("hidden_notices") so its visibility and
+                         audience can be controlled independently of the order
+                         notifications bell. -->
+                    <?php if ( ( ! function_exists( 'brikpanel_topbar_item_is_visible' ) || brikpanel_topbar_item_is_visible( 'hidden_notices' ) ) && get_option( 'brikpanel_hide_foreign_notices', 'yes' ) === 'yes' ) : ?>
+                    <div class="brikpanel-topbar-menu brikpanel-fn-menu is-empty" data-topbar-menu="hidden-notices">
+                        <button type="button" class="brikpanel-topbar-icon-btn" data-topbar-toggle="hidden-notices" aria-haspopup="menu" aria-expanded="false" aria-label="<?php esc_attr_e( 'Hidden notices from other plugins', 'brikpanel' ); ?>">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                            <span class="brikpanel-topbar-badge" id="brikpanel-topbar-fn-badge" hidden>0</span>
+                        </button>
+                        <div class="brikpanel-topbar-dropdown brikpanel-fn-panel" role="menu">
+                            <div class="brikpanel-fn-panel-header">
+                                <span><?php esc_html_e( 'Hidden notices', 'brikpanel' ); ?></span>
+                                <span class="brikpanel-fn-panel-hint"><?php esc_html_e( 'From other plugins &amp; themes', 'brikpanel' ); ?></span>
+                            </div>
+                            <div class="brikpanel-fn-panel-list"></div>
+                            <p class="brikpanel-fn-panel-empty"><?php esc_html_e( 'No hidden notices on this page.', 'brikpanel' ); ?></p>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
+                    <?php $slot( 'right', 'after', 'hidden_notices' ); ?>
+
+                    <?php
+                    if ( class_exists( 'Brikpanel_BrikControl' ) ) {
+                        Brikpanel_BrikControl::instance()->render_topbar_button();
+                    }
+                    ?>
+
+                    <?php
+                    // Master on/off switch (administrators only). Lets an admin
+                    // hand the whole store the classic WordPress admin in one
+                    // click while BrikPanel is still being tuned.
+                    if ( class_exists( 'Brikpanel_Master_Switch' ) ) {
+                        Brikpanel_Master_Switch::instance()->render_topbar_switch();
+                    }
+                    ?>
+
+                    <?php $this->render_cache_clear_button(); ?>
+
+                    <?php $slot( 'right', 'before', 'custom_link' ); ?>
+
+                    <!-- Custom shortcut -->
+                    <?php
+                    $brikpanel_custom_link = brikpanel_topbar_item_is_visible( 'custom_link' ) ? brikpanel_topbar_custom_link() : null;
+                    if ( $brikpanel_custom_link ) :
+                        // Open links to a different host in a new tab; keep same-site admin links in place.
+                        $brikpanel_link_host  = wp_parse_url( $brikpanel_custom_link['url'], PHP_URL_HOST );
+                        $brikpanel_is_external = ! empty( $brikpanel_link_host ) && $brikpanel_link_host !== wp_parse_url( home_url(), PHP_URL_HOST );
+                        ?>
+                    <a class="brikpanel-topbar-btn brikpanel-topbar-btn-secondary" href="<?php echo esc_url( $brikpanel_custom_link['url'] ); ?>"<?php echo $brikpanel_is_external ? ' target="_blank" rel="noopener"' : ''; ?> title="<?php echo esc_attr( $brikpanel_custom_link['label'] ); ?>">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                        <span class="brikpanel-topbar-btn-label"><?php echo esc_html( $brikpanel_custom_link['label'] ); ?></span>
+                    </a>
+                    <?php endif; ?>
+
+                    <?php $slot( 'right', 'after', 'custom_link' ); ?>
+                    <?php $slot( 'right', 'before', 'view_site' ); ?>
+
+                    <!-- View site -->
+                    <?php if ( brikpanel_topbar_item_is_visible( 'view_site' ) ) : ?>
+                    <a class="brikpanel-topbar-icon-btn" href="<?php echo esc_url( $site_url ); ?>" target="_blank" rel="noopener" title="<?php esc_attr_e( 'View store', 'brikpanel' ); ?>" aria-label="<?php esc_attr_e( 'View store', 'brikpanel' ); ?>">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                    </a>
+                    <?php endif; ?>
+
+                    <?php $slot( 'right', 'after', 'view_site' ); ?>
+                    <?php $slot( 'right', 'before', 'user' ); ?>
+
+                    <!-- User menu -->
+                    <?php if ( brikpanel_topbar_item_is_visible( 'user' ) ) : ?>
+                    <div class="brikpanel-topbar-menu brikpanel-topbar-menu-user" data-topbar-menu="user">
+                        <button type="button" class="brikpanel-topbar-user-btn" data-topbar-toggle="user" aria-haspopup="menu" aria-expanded="false">
+                            <img src="<?php echo esc_url( $avatar_url ); ?>" alt="" width="28" height="28" loading="lazy">
+                            <span class="brikpanel-topbar-user-name"><?php echo esc_html( $display_name ); ?></span>
+                            <svg class="brikpanel-topbar-user-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                        <div class="brikpanel-topbar-dropdown brikpanel-topbar-dropdown-user" role="menu">
+                            <div class="brikpanel-topbar-user-card">
+                                <img src="<?php echo esc_url( $avatar_url ); ?>" alt="" width="36" height="36">
+                                <div class="brikpanel-topbar-user-card-text">
+                                    <strong><?php echo esc_html( $display_name ); ?></strong>
+                                    <span><?php echo esc_html( $current_user->user_email ); ?></span>
+                                </div>
+                            </div>
+                            <a class="brikpanel-topbar-dropdown-item" role="menuitem" href="<?php echo esc_url( $profile_url ); ?>">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                <span><?php esc_html_e( 'Your profile', 'brikpanel' ); ?></span>
+                            </a>
+                            <?php
+                            // Only surface the settings shortcut to users who may
+                            // actually open the BrikPanel settings tab. With the
+                            // "Restrict settings to administrators" lock on, a shop
+                            // manager (even one granted manage_options by a role
+                            // editor) is redirected away from the tab, so the link
+                            // would be a dead end that wrongly implies access.
+                            if ( ! function_exists( 'brikpanel_user_can_open_settings' ) || brikpanel_user_can_open_settings() ) :
+                                ?>
+                            <a class="brikpanel-topbar-dropdown-item" role="menuitem" href="<?php echo esc_url( admin_url( 'admin.php?page=wc-settings&tab=brikpanel' ) ); ?>">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                                <span><?php esc_html_e( 'BrikPanel settings', 'brikpanel' ); ?></span>
+                            </a>
+                            <?php endif; ?>
+                            <?php
+                            // Multisite: BrikPanel hides the native WP toolbar, which is
+                            // normally the only path to "My Sites -> Network Admin". Surface
+                            // a direct Network Admin link for network administrators so they
+                            // can still reach network updates, plugins and tools.
+                            if ( is_multisite() && current_user_can( 'manage_network' ) ) :
+                                ?>
+                            <a class="brikpanel-topbar-dropdown-item" role="menuitem" href="<?php echo esc_url( network_admin_url() ); ?>">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                                <span><?php esc_html_e( 'Network Admin', 'brikpanel' ); ?></span>
+                            </a>
+                            <?php endif; ?>
+                            <div class="brikpanel-topbar-dropdown-sep" aria-hidden="true"></div>
+                            <a class="brikpanel-topbar-dropdown-item brikpanel-topbar-dropdown-item-danger" role="menuitem" href="<?php echo esc_url( $logout_url ); ?>">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                                <span><?php esc_html_e( 'Log out', 'brikpanel' ); ?></span>
+                            </a>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
+                    <?php $slot( 'right', 'after', 'user' ); ?>
+                    <?php $slot( 'right' ); ?>
+                </div>
+            </div>
+            <!-- Sits outside .brikpanel-topbar-left, which clips its overflow. -->
+            <span class="brikpanel-topbar-sidebar-tip" id="brikpanel-topbar-sidebar-tip" aria-hidden="true">
+                <span class="brikpanel-topbar-sidebar-tip-label"><?php echo esc_html( $brikpanel_sidebar_hidden ? __( 'Show sidebar', 'brikpanel' ) : __( 'Hide sidebar', 'brikpanel' ) ); ?></span>
+                <kbd class="brikpanel-topbar-sidebar-tip-kbd">[</kbd>
+            </span>
+        </header>
+        <?php
+    }
+
+    // =========================================================================
+    // COMING SOON BADGE
+    // =========================================================================
+
+    /**
+     * Renders a "Coming soon" badge while WooCommerce Site visibility keeps the
+     * store hidden from shoppers. WooCommerce puts the same badge in the native
+     * WP toolbar, which BrikPanel hides, so without this the owner has no sign
+     * that the store is closed. Mirrors WooCommerce's own rules: shown only to
+     * users who can manage WooCommerce, and only while its badge is not
+     * switched off. Nothing is rendered when the store is live.
+     */
+    private function render_coming_soon_badge() {
+        if ( get_option( 'woocommerce_coming_soon' ) !== 'yes' ) {
+            return;
+        }
+        if ( get_option( 'woocommerce_feature_site_visibility_badge_enabled', 'yes' ) !== 'yes' ) {
+            return;
+        }
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            return;
+        }
+        // Before WooCommerce 11.1 the Launch Your Store feature itself could be
+        // switched off, and the store then stays live whatever the option says.
+        // 11.1 retired that flag (asking for it logs a deprecation notice) and
+        // always follows the option, so it is only consulted on older versions.
+        if ( defined( 'WC_VERSION' ) && version_compare( WC_VERSION, '11.1.0-dev', '<' )
+            && class_exists( '\Automattic\WooCommerce\Admin\Features\Features' ) ) {
+            try {
+                if ( ! \Automattic\WooCommerce\Admin\Features\Features::is_enabled( 'launch-your-store' ) ) {
+                    return;
+                }
+            } catch ( \Throwable $e ) {
+                // Keep trusting the option; this only decides whether to warn.
+            }
+        }
+
+        // Context keeps this apart from the ad platforms' "Coming soon" pill,
+        // which means a feature that is not available yet.
+        $label = get_option( 'woocommerce_store_pages_only' ) === 'yes'
+            ? __( 'Store coming soon', 'brikpanel' )
+            : _x( 'Coming soon', 'store visibility badge', 'brikpanel' );
+        $url = admin_url( 'admin.php?page=wc-settings&tab=site-visibility' );
+        // With "Block pages hidden from the menu" on and the settings screen
+        // closed to this user, the badge still tells them the store is hidden,
+        // but links nowhere: the link would only open the "not available" card.
+        $linked = ! ( function_exists( 'brikpanel_nav_url_blocked_for_current_user' ) && brikpanel_nav_url_blocked_for_current_user( $url ) );
+        $icon   = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+        if ( $linked ) :
+            ?>
+        <a class="brikpanel-topbar-coming-soon" href="<?php echo esc_url( $url ); ?>" aria-label="<?php echo esc_attr( $label ); ?>" title="<?php esc_attr_e( 'Your store is hidden from visitors. Click to change site visibility.', 'brikpanel' ); ?>">
+            <?php echo $icon; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- static markup above. ?>
+            <span class="brikpanel-topbar-coming-soon-label"><?php echo esc_html( $label ); ?></span>
+        </a>
+            <?php
+        else :
+            ?>
+        <span class="brikpanel-topbar-coming-soon is-static" role="note" aria-label="<?php echo esc_attr( $label ); ?>" title="<?php esc_attr_e( 'Your store is hidden from visitors.', 'brikpanel' ); ?>">
+            <?php echo $icon; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- static markup above. ?>
+            <span class="brikpanel-topbar-coming-soon-label"><?php echo esc_html( $label ); ?></span>
+        </span>
+            <?php
+        endif;
+    }
+
+    // =========================================================================
+    // CACHE CLEAR BUTTON
+    // =========================================================================
+
+    /**
+     * Renders a one-click "Clear cache" control in the topbar when one or more
+     * supported cache / optimization plugins are active.
+     *
+     * - 1 active plugin  → single icon button that purges that plugin.
+     * - 2+ active plugins → icon button + dropdown listing each plugin and a
+     *   "Clear all" entry.
+     * - 0 active plugins → nothing rendered (no DOM cost).
+     * - LiteSpeed Cache with the "Cache button" setting on its menu → a
+     *   dropdown of LiteSpeed's own purge options (see render_litespeed_group()),
+     *   alone or as the LiteSpeed group of the 2+ plugin dropdown. When
+     *   LiteSpeed's admin bar offered none on this request, the one-click
+     *   button stays.
+     * - Extras (Elementor's cache) have no row: a click that purges every
+     *   active cache clears them too, and its title, LiteSpeed's "Clear
+     *   everything" line or the line under "Clear all caches" says so. They
+     *   never render the control on their own.
+     *
+     * Only users with `manage_options` see the control, mirroring the
+     * capability check enforced in the AJAX handler (and LiteSpeed's own).
+     */
+    private function render_cache_clear_button() {
+        if ( ! class_exists( 'Brikpanel_Cache_Clear' ) ) {
+            return;
+        }
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+
+        $active = Brikpanel_Cache_Clear::get_active_caches();
+        if ( empty( $active ) ) {
+            return;
+        }
+        $extra_parts = Brikpanel_Cache_Clear::extra_parts();
+
+        $broom_svg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.36 2.72l1.42 1.42-5.72 5.71-1.42-1.42z"/><path d="M14.27 8.83l-2.12 2.12-1.42-1.41 2.13-2.13"/><path d="M5.5 12.5l4 4"/><path d="M3 21l3.5-3.5a3 3 0 0 1 4.24 0l1.76 1.76a3 3 0 0 1 0 4.24"/><path d="M8 22l1.5-1.5"/><path d="M11.5 18.5L13 17"/></svg>';
+
+        $litespeed_items = isset( $active['litespeed'] ) && Brikpanel_Cache_Clear::litespeed_menu_mode()
+            ? Brikpanel_Cache_Clear::litespeed_items()
+            : [];
+
+        // Single plugin — render a flat icon button (no dropdown).
+        if ( count( $active ) === 1 && empty( $litespeed_items ) ) {
+            $id    = key( $active );
+            $label = current( $active );
+            $title = 'litespeed' === $id
+                ? Brikpanel_Cache_Clear::litespeed_purge_all_title( true )
+                : sprintf(
+                    /* translators: %s: cache plugin name (e.g. "WP Rocket"), or a list ending with what goes along (e.g. "WP Rocket and Elementor cache") */
+                    __( 'Purge %s', 'brikpanel' ),
+                    wp_sprintf_l( '%l', array_merge( [ $label ], $extra_parts ) )
+                );
+            ?>
+            <button type="button"
+                    class="brikpanel-topbar-icon-btn brikpanel-topbar-cache-btn"
+                    data-cache-id="<?php echo esc_attr( $id ); ?>"
+                    title="<?php echo esc_attr( $title ); ?>"
+                    aria-label="<?php echo esc_attr( $title ); ?>">
+                <?php echo $broom_svg; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- static SVG markup ?>
+                <span class="brikpanel-topbar-cache-spinner" aria-hidden="true"></span>
+            </button>
+            <?php
+            return;
+        }
+
+        // A dropdown: 2+ plugins, LiteSpeed's purge menu, or both. The toggle
+        // carries no data-cache-id, so a click opens the menu and purges nothing.
+        $only_litespeed = count( $active ) === 1;
+        $menu_class     = 'brikpanel-topbar-dropdown brikpanel-topbar-dropdown-cache' . ( $litespeed_items ? ' brikpanel-topbar-dropdown-cache-types' : '' );
+        ?>
+        <div class="brikpanel-topbar-menu" data-topbar-menu="cache">
+            <button type="button"
+                    class="brikpanel-topbar-icon-btn brikpanel-topbar-cache-btn"
+                    data-topbar-toggle="cache"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                    title="<?php esc_attr_e( 'Clear cache', 'brikpanel' ); ?>"
+                    aria-label="<?php esc_attr_e( 'Clear cache', 'brikpanel' ); ?>">
+                <?php echo $broom_svg; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- static SVG markup ?>
+                <span class="brikpanel-topbar-cache-spinner" aria-hidden="true"></span>
+            </button>
+            <div class="<?php echo esc_attr( $menu_class ); ?>" role="menu">
+                <?php if ( $only_litespeed ) : ?>
+                <div class="brikpanel-topbar-dropdown-header"><?php echo esc_html( $active['litespeed'] ); ?></div>
+                <?php $this->render_litespeed_group( $litespeed_items, $broom_svg, true ); ?>
+                <?php else : ?>
+                <div class="brikpanel-topbar-dropdown-header">
+                    <?php esc_html_e( 'Clear cache', 'brikpanel' ); ?>
+                </div>
+                <button type="button"
+                        class="brikpanel-topbar-dropdown-item brikpanel-topbar-cache-item<?php echo $extra_parts ? ' brikpanel-topbar-cache-entry' : ''; ?>"
+                        role="menuitem"
+                        data-cache-id="all">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    <?php if ( $extra_parts ) : ?>
+                    <span class="brikpanel-topbar-cache-text">
+                        <span class="brikpanel-topbar-cache-label"><?php esc_html_e( 'Clear all caches', 'brikpanel' ); ?></span>
+                        <span class="brikpanel-topbar-cache-desc"><?php
+                            echo esc_html( sprintf(
+                                /* translators: %s: what else this click clears, e.g. "Elementor cache" */
+                                __( 'Also clears the %s', 'brikpanel' ),
+                                wp_sprintf_l( '%l', $extra_parts )
+                            ) );
+                        ?></span>
+                    </span>
+                    <?php else : ?>
+                    <span><?php esc_html_e( 'Clear all caches', 'brikpanel' ); ?></span>
+                    <?php endif; ?>
+                </button>
+                <div class="brikpanel-topbar-dropdown-sep" aria-hidden="true"></div>
+                <?php
+                $last = count( $active ) - 1;
+                $row  = 0;
+                foreach ( $active as $id => $label ) :
+                    if ( 'litespeed' === $id && $litespeed_items ) :
+                        // LiteSpeed's own options, framed as a group of their own.
+                        if ( $row > 0 ) :
+                            ?>
+                <div class="brikpanel-topbar-dropdown-sep" aria-hidden="true"></div>
+                            <?php
+                        endif;
+                        ?>
+                <div class="brikpanel-topbar-dropdown-header"><?php echo esc_html( $label ); ?></div>
+                        <?php
+                        $this->render_litespeed_group( $litespeed_items, $broom_svg );
+                        if ( $row < $last ) :
+                            ?>
+                <div class="brikpanel-topbar-dropdown-sep" aria-hidden="true"></div>
+                            <?php
+                        endif;
+                    elseif ( 'litespeed' === $id ) :
+                        // One click for LiteSpeed too, with what that click clears.
+                        ?>
+                    <button type="button"
+                            class="brikpanel-topbar-dropdown-item brikpanel-topbar-cache-item brikpanel-topbar-cache-entry"
+                            role="menuitem"
+                            data-cache-id="litespeed">
+                        <?php echo $broom_svg; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- static SVG markup ?>
+                        <span class="brikpanel-topbar-cache-text">
+                            <span class="brikpanel-topbar-cache-label"><?php echo esc_html( $label ); ?></span>
+                            <span class="brikpanel-topbar-cache-desc"><?php echo esc_html( Brikpanel_Cache_Clear::litespeed_purge_all_summary() ); ?></span>
+                        </span>
+                    </button>
+                        <?php
+                    else :
+                        ?>
+                    <button type="button"
+                            class="brikpanel-topbar-dropdown-item brikpanel-topbar-cache-item"
+                            role="menuitem"
+                            data-cache-id="<?php echo esc_attr( $id ); ?>">
+                        <?php echo $broom_svg; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- static SVG markup ?>
+                        <span><?php echo esc_html( $label ); ?></span>
+                    </button>
+                        <?php
+                    endif;
+                    $row++;
+                endforeach;
+                ?>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * LiteSpeed's purge options inside the cache dropdown.
+     *
+     * The first row, "Clear everything", is LiteSpeed's Purge All through
+     * BrikPanel's own AJAX purge (the same as the one-click button), with what
+     * it clears underneath. The others are LiteSpeed's own admin bar links:
+     * its nonce, its translated labels, and only what applies to this site
+     * (see Brikpanel_Cache_Clear::litespeed_items()). The top bar script
+     * fetches them in the background; a modified or middle click just follows
+     * LiteSpeed's link, which purges and comes back with LiteSpeed's notice.
+     *
+     * @param array  $items       Brikpanel_Cache_Clear::litespeed_items().
+     * @param string $broom_svg   Static icon markup.
+     * @param bool   $with_extras LiteSpeed is the only cache, so its "Clear
+     *                            everything" takes the extras along.
+     */
+    private function render_litespeed_group( array $items, $broom_svg, $with_extras = false ) {
+        ?>
+                <button type="button"
+                        class="brikpanel-topbar-dropdown-item brikpanel-topbar-cache-item brikpanel-topbar-cache-entry"
+                        role="menuitem"
+                        data-cache-id="litespeed">
+                    <?php echo $broom_svg; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- static SVG markup ?>
+                    <span class="brikpanel-topbar-cache-text">
+                        <span class="brikpanel-topbar-cache-label"><?php esc_html_e( 'Clear everything', 'brikpanel' ); ?></span>
+                        <span class="brikpanel-topbar-cache-desc"><?php echo esc_html( Brikpanel_Cache_Clear::litespeed_purge_all_summary( $with_extras ) ); ?></span>
+                    </span>
+                </button>
+                <div class="brikpanel-topbar-dropdown-sep" aria-hidden="true"></div>
+                <?php foreach ( $items as $item ) : ?>
+                <a class="brikpanel-topbar-dropdown-item brikpanel-topbar-cache-type brikpanel-topbar-cache-entry"
+                   role="menuitem"
+                   href="<?php echo esc_url( $item['href'] ); ?>"
+                   data-cache-label="<?php echo esc_attr( $item['label'] ); ?>">
+                    <span class="brikpanel-topbar-cache-text">
+                        <span class="brikpanel-topbar-cache-label"><?php echo esc_html( $item['label'] ); ?></span>
+                        <?php if ( 'litespeed-purge-all-lscache' === $item['id'] ) : ?>
+                        <span class="brikpanel-topbar-cache-desc"><?php echo esc_html_x( 'Page cache', 'LiteSpeed LSCache purge option', 'brikpanel' ); ?></span>
+                        <?php endif; ?>
+                    </span>
+                </a>
+                <?php endforeach; ?>
+        <?php
+    }
+
+    // =========================================================================
+    // AJAX: LIVE STATS (live visitors / notification counts)
+    // =========================================================================
+
+    public function ajax_stats() {
+        if ( ! check_ajax_referer( self::NONCE_ACTION, 'security', false ) ) {
+            wp_send_json_error( [ 'message' => 'Invalid nonce.' ] );
+        }
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( [ 'message' => 'Unauthorized.' ] );
+        }
+
+        $counts = $this->get_notification_counts();
+
+        // Live visitors: the same rule as the dashboard's Live card (ping
+        // timeout and idle limit), from back-end/live/brikpanel-live.php.
+        $live = function_exists( 'brikpanel_live_active_visitors' ) ? count( brikpanel_live_active_visitors() ) : 0;
+
+        wp_send_json_success( [
+            'live'          => $live,
+            'notifications' => $counts,
+            // The shared data version (brikpanel_data_cache_ver()): a screen
+            // left open (the dashboard, the Orders summary) compares it with
+            // the one its figures came with and fetches them again when an
+            // order changed. This poll runs on every screen anyway, so the
+            // screens need no poll of their own.
+            'ver'           => function_exists( 'brikpanel_data_cache_ver' ) ? (int) brikpanel_data_cache_ver() : 0,
+        ] );
+    }
+
+    // =========================================================================
+    // AJAX: SIDEBAR HIDDEN / SHOWN (per user)
+    // =========================================================================
+
+    public function ajax_sidebar_state() {
+        if ( ! check_ajax_referer( self::NONCE_ACTION, 'security', false ) ) {
+            wp_send_json_error( [ 'message' => __( 'Your session has expired. Please reload the page.', 'brikpanel' ) ], 403 );
+        }
+        // Same audience as the bar itself (see should_render()).
+        if ( ! current_user_can( 'manage_woocommerce' ) && ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'You are not allowed to do this.', 'brikpanel' ) ], 403 );
+        }
+
+        $raw = isset( $_POST['hidden'] ) ? sanitize_key( wp_unslash( $_POST['hidden'] ) ) : '';
+        if ( ! in_array( $raw, [ 'yes', 'no' ], true ) ) {
+            wp_send_json_error( [ 'message' => __( 'Invalid request.', 'brikpanel' ) ], 400 );
+        }
+
+        $user_id = get_current_user_id();
+        if ( $raw === 'yes' ) {
+            update_user_meta( $user_id, self::SIDEBAR_HIDDEN_META, 'yes' );
+        } else {
+            delete_user_meta( $user_id, self::SIDEBAR_HIDDEN_META );
+        }
+
+        wp_send_json_success( [ 'hidden' => $raw === 'yes' ] );
+    }
+
+    /**
+     * Store-wide counts behind the notification bell.
+     *
+     * The bar polls every 30 seconds from every open admin tab, so these six
+     * queries used to run on each poll of each tab. They are cached for a
+     * minute and keyed to the shared data version, which every new order and
+     * every order status change bumps, so order counts still move on the very
+     * next poll. Only the out-of-stock and new-customer numbers can lag, by at
+     * most COUNTS_TTL.
+     *
+     * @return array{processing:int, pending:int, onhold:int, oos:int, customers:int, total:int}
+     */
+    private function get_notification_counts() {
+        $ver    = function_exists( 'brikpanel_data_cache_ver' ) ? (int) brikpanel_data_cache_ver() : 0;
+        // "Today" is part of the key: at midnight the new-customer count starts
+        // again from zero on the next poll, not a minute later.
+        $day    = wp_date( 'Y-m-d' );
+        $cached = get_transient( self::COUNTS_TRANSIENT );
+        if ( is_array( $cached ) && isset( $cached['ver'], $cached['data'], $cached['day'] ) && (int) $cached['ver'] === $ver
+            && $cached['day'] === $day && is_array( $cached['data'] ) ) {
+            return $cached['data'];
+        }
+
+        $counts = [
+            'processing' => 0,
+            'pending'    => 0,
+            'onhold'     => 0,
+        ];
+        if ( function_exists( 'wc_orders_count' ) ) {
+            $counts['processing'] = (int) wc_orders_count( 'processing' );
+            $counts['pending']    = (int) wc_orders_count( 'pending' );
+            $counts['onhold']     = (int) wc_orders_count( 'on-hold' );
+        }
+
+        // Out-of-stock products.
+        $oos_query = new WP_Query( [
+            'post_type'      => 'product',
+            'post_status'    => 'publish',
+            'posts_per_page' => 1,
+            'fields'         => 'ids',
+            'meta_query'     => [
+                [ 'key' => '_stock_status', 'value' => 'outofstock' ],
+            ],
+            'no_found_rows'  => false,
+        ] );
+        $oos = (int) $oos_query->found_posts;
+        wp_reset_postdata();
+
+        // New customers today = customers whose first paid order is today, guest
+        // checkouts included: the Customers list's "New today" view the row opens,
+        // counted by the same code. Without the Customers page, first-time buyers
+        // from WooCommerce's stats table, or registrations when it is missing.
+        global $wpdb;
+        $start_local   = wp_date( 'Y-m-d 00:00:00' );
+        $end_local     = wp_date( 'Y-m-d 23:59:59' );
+        $start_gmt     = get_gmt_from_date( $start_local );
+        $end_gmt       = get_gmt_from_date( $end_local );
+        $stats_table   = $wpdb->prefix . 'wc_order_stats';
+        $new_customers = 0;
+        $engine        = class_exists( 'Brikpanel_Customers_Engine' );
+        $has_stats     = ! $engine && function_exists( 'brikpanel_paid_statuses_sql' )
+            && $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $stats_table ) );
+
+        if ( $engine ) {
+            $new_customers = $this->new_customers_today( $ver, $day );
+        } elseif ( $has_stats ) {
+            $new_customers = (int) $wpdb->get_var( $wpdb->prepare(
+                "SELECT COUNT(*) FROM {$stats_table}
+                WHERE returning_customer = 0
+                AND date_created_gmt BETWEEN %s AND %s
+                AND status IN (" . brikpanel_paid_statuses_sql() . ")", // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+                $start_gmt,
+                $end_gmt
+            ) );
+        } else {
+            $cu_query = new WP_User_Query( [
+                'role__in'    => [ 'customer', 'subscriber' ],
+                'date_query'  => [ [ 'after' => $start_local, 'before' => $end_local, 'inclusive' => true ] ],
+                'count_total' => true,
+                'number'      => 1,
+                'fields'      => 'ID',
+            ] );
+            $new_customers = (int) $cu_query->get_total();
+        }
+
+        $data = [
+            'processing' => $counts['processing'],
+            'pending'    => $counts['pending'],
+            'onhold'     => $counts['onhold'],
+            'oos'        => $oos,
+            'customers'  => $new_customers,
+            'total'      => $counts['processing'] + $counts['pending'] + $counts['onhold'],
+        ];
+
+        set_transient( self::COUNTS_TRANSIENT, [ 'ver' => $ver, 'day' => $day, 'data' => $data ], self::COUNTS_TTL );
+
+        return $data;
+    }
+
+    /**
+     * Customers whose first paid order is today, the Customers list's rule.
+     *
+     * On WooCommerce's own order tables the answer comes from an index in a
+     * few milliseconds, so it follows every order like the other rows. On the
+     * posts tables it needs a pass over every order's customer meta (about 2 s
+     * on 100,000 orders), so there it is worked out at most every five
+     * minutes instead of after each new order.
+     *
+     * @param int    $ver Shared data version.
+     * @param string $day Today, local 'Y-m-d'.
+     * @return int
+     */
+    private function new_customers_today( $ver, $day ) {
+        $hpos   = Brikpanel_Customers_Engine::hpos();
+        $cached = get_transient( self::NEW_CUSTOMERS_TRANSIENT );
+        if ( is_array( $cached ) && isset( $cached['day'], $cached['n'], $cached['ver'] ) && $cached['day'] === $day
+            && ( ! $hpos || (int) $cached['ver'] === $ver ) ) {
+            return (int) $cached['n'];
+        }
+        $n = (int) Brikpanel_Customers_Engine::first_time_buyers( $day, $day );
+        set_transient( self::NEW_CUSTOMERS_TRANSIENT, [ 'day' => $day, 'ver' => $ver, 'n' => $n ], $hpos ? self::COUNTS_TTL : 5 * MINUTE_IN_SECONDS );
+        return $n;
+    }
+}
+
+Brikpanel_Dashboard_Topbar::instance();

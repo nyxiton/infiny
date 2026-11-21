@@ -1,0 +1,285 @@
+<?php
+
+namespace UkrSolution\BarcodeScanner\API\actions;
+
+use UkrSolution\BarcodeScanner\API\classes\Post;
+use UkrSolution\BarcodeScanner\API\classes\Results;
+use UkrSolution\BarcodeScanner\Database;
+use UkrSolution\BarcodeScanner\features\debug\Debug;
+use UkrSolution\BarcodeScanner\features\settings\Settings;
+use WP_REST_Request;
+
+class DbActions
+{
+    public function createColumn(WP_REST_Request $request)
+    {
+        global $wpdb;
+        global $wp_version;
+
+        Debug::addPoint("indexation->start");
+
+        $fields = $request->get_param("fields");
+        $searchAttributes = $request->get_param("searchAttributes");
+        $autoEnableIndexation = trim($request->get_param("autoEnableIndexation"));
+        $progress = $request->get_param("progress");
+        $isFast = false;
+
+        if ($fields && count($fields) === 1 && $fields[0]["type"] === "indexing") {
+            $indexing = true;
+        } else {
+            $indexing = false;
+        }
+
+        if (isset($progress['fast'])) {
+            $isFast = $progress['fast'];
+        }
+
+        $settings = new Settings();
+
+        if ($progress) {
+            $data = Database::updatePostsTable($progress["offset"], $progress["limit"], $isFast);
+
+            if ($indexing) {
+                $data["indexing"] = $indexing;
+            }
+
+            if ($isFast) {
+                $data['fast'] = $isFast;
+            }
+
+            $result = array(
+                "initialization" => $data["offset"] < $data["total"],
+                'progress' => $data
+            );
+
+            return rest_ensure_response($result);
+        } else if (is_array($fields) || is_array($searchAttributes)) {
+            $isNewFields = false;
+
+            if (is_array($fields)) {
+                foreach ($fields as $field) {
+                    $type = $field["type"];
+                    $name = trim($field["field"]);
+                    $fieldTable = $type === "order-item" ? "order-item" : "postmeta";
+
+                    if (!$name) {
+                        continue;
+                    }
+
+                    // @codingStandardsIgnoreStart
+                    if (preg_match("/^(.*?)\*(.*?)$/", $name, $m)) {
+                        $nameLike = str_replace("*", "%", $name);
+                        $customField = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$wpdb->postmeta} AS pm WHERE pm.meta_key LIKE %s;", $nameLike));
+                    }
+                    else {
+                        $customField = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->postmeta} AS pm WHERE pm.meta_key = %s LIMIT 1;", $name));
+                    }
+                    // @codingStandardsIgnoreEnd
+
+                    if ($type === "order" && HPOS::getStatus() && !$customField) {
+                        // @codingStandardsIgnoreStart
+                        $customField = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}wc_orders_meta AS om WHERE om.meta_key = %s LIMIT 1;", $name));
+                        // @codingStandardsIgnoreEnd
+                    }
+
+                    if (!$customField && !key_exists($name, Database::$postsFields)) {
+                        $key = "-";
+                        $url = "https://www.ukrsolution.com/ExtensionsSupport/Support?extension=24&version=1.13.6&pversion=" . $wp_version . "&d=" . base64_encode($key);
+                        if ($type === "order") {
+                            $message = sprintf(
+                                /* translators: %1$s: custom field name, %2$s: contact URL */
+                                __(
+                                    'Order\'s custom field "%1$s" not found. Please make sure you entered a correct database value or <a href="%2$s" target="_blank">contact us</a> for help.',
+                                    'barcode-scanner-lite-pos-to-manage-products-inventory-and-orders'
+                                ),
+                                esc_html($name),
+                                esc_url($url)
+                            );
+                        } else if ($type === "order-item") {
+                            $message = sprintf(
+                                /* translators: %1$s: custom field name, %2$s: contact URL */
+                                __(
+                                    'Order item\'s custom field "%1$s" not found. Please make sure you entered a correct database value or <a href="%2$s" target="_blank">contact us</a> for help.',
+                                    'barcode-scanner-lite-pos-to-manage-products-inventory-and-orders'
+                                ),
+                                esc_html($name),
+                                esc_url($url)
+                            );
+                        } else {
+                            $message = sprintf(
+                                /* translators: %1$s: custom field name, %2$s: contact URL */
+                                __(
+                                    'Product\'s custom field "%1$s" not found. Please make sure you entered a correct database value or <a href="%2$s" target="_blank">contact us</a> for help.',
+                                    'barcode-scanner-lite-pos-to-manage-products-inventory-and-orders'
+                                ),
+                                esc_html($name),
+                                esc_url($url)
+                            );
+                        }
+
+                        $result = array("error" => $message);
+
+                        return rest_ensure_response($result);
+                    }
+
+                    $column = Database::addPostColumn($name, $fieldTable);
+
+                    $isIndexed = $settings->getField("indexing", "indexed", false);
+
+                    if ($column["isNew"] || !$isIndexed) {
+                        $isNewFields = true;
+                    }
+                }
+            }
+            if (is_array($searchAttributes)) {
+                foreach ($searchAttributes as $attribute) {
+                    $type = $attribute["type"];
+                    $name = trim($attribute["field"]);
+
+                    if (!$name) {
+                        continue;
+                    }
+
+                    // @codingStandardsIgnoreStart
+                    $existingLocalAttribute = $wpdb->get_row(
+                        $wpdb->prepare("SELECT * FROM {$wpdb->prefix}postmeta AS PM WHERE PM.meta_key = '_product_attributes' AND PM.meta_value LIKE %s LIMIT 1;", "%\"{$name}\"%")
+                    );
+
+                    $existingGlobalAttribute = $wpdb->get_row(
+                        $wpdb->prepare("SELECT * FROM {$wpdb->prefix}woocommerce_attribute_taxonomies AS WAT WHERE WAT.attribute_name = %s LIMIT 1;", $name)
+                    );
+                    // @codingStandardsIgnoreEnd
+
+                    if (!$existingLocalAttribute && !$existingGlobalAttribute) {
+                        $key = "-";
+                        $url = "https://www.ukrsolution.com/ExtensionsSupport/Support?extension=24&version=1.13.6&pversion=" . $wp_version . "&d=" . base64_encode($key);
+                        $message = sprintf(
+                            /* translators: %1$s: attribute name, %2$s: contact URL */
+                            __(
+                                'Attribute "%1$s" not found. Please make sure you entered a correct database value or <a href="%2$s" target="_blank">contact us</a> for help.',
+                                'barcode-scanner-lite-pos-to-manage-products-inventory-and-orders'
+                            ),
+                            esc_html($name),
+                            esc_url($url)
+                        );
+                        $result = array("error" => $message);
+
+                        return rest_ensure_response($result);
+                    }
+
+                    $column = Database::addPostColumn($name, "attributes");
+
+                    $isIndexed = $settings->getField("indexing", "indexed", false);
+
+                    if ($column["isNew"] || !$isIndexed) {
+                        $isNewFields = true;
+                    }
+                }
+            }
+
+            if ($isNewFields) {
+                // @codingStandardsIgnoreStart
+                $table = $wpdb->prefix . Database::$posts;
+                $wpdb->query("UPDATE {$table} SET `updated` = '0000-00-00 00:00:00';");
+                // @codingStandardsIgnoreEnd
+                return rest_ensure_response(array("success" => 1, "isNewField" => 1));
+            }
+        }
+
+        $result = array(
+            "status" => "success",
+        );
+
+        return rest_ensure_response($result);
+    }
+
+    public function saveSession(WP_REST_Request $request)
+    {
+        $session = $request->get_param("session");
+        $sessionStamp = $request->get_param("sessionStamp");
+
+        if (!$session || !$sessionStamp) {
+            return rest_ensure_response(array("success" => false));
+        }
+
+        $settings = new Settings();
+
+        $settings->updateField("session", "session", null);
+        $settings->updateField("sessionStamp", "sessionStamp", null);
+        $settings->updateSettings("session", $session, "text");
+        $settings->updateSettings("sessionStamp", $sessionStamp, "text");
+
+        $result = array("status" => "success");
+
+        return rest_ensure_response($result);
+    }
+
+    public function saveSettings(WP_REST_Request $request)
+    {
+        $param = $request->get_param("param");
+
+        $_POST["tab"] = $request->get_param("tab");
+        $_POST[$param] = $request->get_param("value");
+
+        $settings = new Settings();
+        $settings->formListener();
+
+        $result = array("status" => "success");
+
+        return rest_ensure_response($result);
+    }
+
+    public function postsInitialization(WP_REST_Request $request)
+    {
+        $progress = $request->get_param("progress");
+
+        if ($progress) {
+            $data = Database::updatePostsTable($progress["offset"], $progress["limit"]);
+
+            return rest_ensure_response(array(
+                "initialization" => $data["offset"] < $data["total"],
+                'progress' => $data
+            ));
+        }
+
+        $result = array(
+            "status" => "success",
+        );
+
+        return rest_ensure_response($result);
+    }
+
+    public function backgroundIndexing(WP_REST_Request $request, $settings)
+    {
+        global $wpdb;
+
+        $defaultValue = $settings->getSettings("disabledIndexation");
+        $defaultValue = $defaultValue === null ? 'off' : $defaultValue->value;
+
+        if ($defaultValue === "on") {
+            return rest_ensure_response(array("status" => "success", "disabledIndexation" => true));
+        }
+
+        if (wp_rand(0, 100) === 100) {
+            // @codingStandardsIgnoreStart
+            $wpdb->query("DELETE FROM {$wpdb->prefix}barcode_scanner_posts WHERE post_id NOT IN(SELECT ID FROM {$wpdb->prefix}posts) LIMIT 1000;");
+            // @codingStandardsIgnoreEnd
+        }
+
+        $indexationStep = $settings->getSettings("indexationStep");
+        $limit = $indexationStep && (int) $indexationStep->value ? (int) $indexationStep->value : 50;
+        $result = Database::updatePostsTable(0, $limit, true);
+
+        return rest_ensure_response($result);
+    }
+
+    public function indexingClearTable(WP_REST_Request $request)
+    {
+        Database::clearTableColumns();
+        Database::initDataTableColumns();
+        Database::removeTableProducts();
+        Database::setupTableProducts(true, true);
+
+        return rest_ensure_response(array("success" => 1));
+    }
+}

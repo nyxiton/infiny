@@ -1,0 +1,96 @@
+name: infiny
+
+services:
+  wordpress:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WORDPRESS_PORT:-8080}:80"
+    environment:
+      WORDPRESS_DB_HOST: mariadb:3306
+      WORDPRESS_DB_NAME: ${MARIADB_DATABASE:-wordpress}
+      WORDPRESS_DB_USER: ${MARIADB_USER:-wordpress}
+      WORDPRESS_DB_PASSWORD: ${MARIADB_PASSWORD:?Renseigner MARIADB_PASSWORD dans .env}
+      WORDPRESS_CONFIG_EXTRA: |
+        define('DISALLOW_FILE_EDIT', true);
+    volumes:
+      - wordpress_mariadb_data:/var/www/html
+      - ./wordpress/wp-content/themes/infiny-noir-or:/var/www/html/wp-content/themes/infiny-noir-or
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  wordpress-copy:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WORDPRESS_COPY_PORT:-8081}:80"
+    environment: &copy-environment
+      WORDPRESS_DB_HOST: mariadb-copy:3306
+      WORDPRESS_DB_NAME: ${MARIADB_DATABASE:-wordpress}
+      WORDPRESS_DB_USER: ${MARIADB_USER:-wordpress}
+      WORDPRESS_DB_PASSWORD: ${MARIADB_PASSWORD:?Renseigner MARIADB_PASSWORD dans .env}
+      WORDPRESS_CONFIG_EXTRA: |
+        define('DISALLOW_FILE_EDIT', true);
+        define('WP_ENVIRONMENT_TYPE', 'local');
+        define('DISABLE_WP_CRON', true);
+    volumes:
+      - wordpress_copy_data:/var/www/html
+      - ./wordpress-1/wp-content:/var/www/html/wp-content
+    depends_on:
+      mariadb-copy:
+        condition: service_healthy
+
+  wordpress-copy-cli:
+    image: wordpress:cli-php8.3
+    profiles: [tools]
+    user: "33:33"
+    environment:
+      <<: *copy-environment
+      WP_CLI_CACHE_DIR: /tmp/wp-cli-cache
+    volumes:
+      - wordpress_copy_data:/var/www/html
+      - ./wordpress-1/wp-content:/var/www/html/wp-content
+    depends_on:
+      mariadb-copy:
+        condition: service_healthy
+
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-wordpress}
+      MARIADB_USER: ${MARIADB_USER:-wordpress}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?Renseigner MARIADB_PASSWORD dans .env}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?Renseigner MARIADB_ROOT_PASSWORD dans .env}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  mariadb-copy:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-wordpress}
+      MARIADB_USER: ${MARIADB_USER:-wordpress}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?Renseigner MARIADB_PASSWORD dans .env}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?Renseigner MARIADB_ROOT_PASSWORD dans .env}
+    volumes:
+      - mariadb_copy_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  wordpress_mariadb_data:
+  mariadb_data:
+  wordpress_copy_data:
+  mariadb_copy_data:

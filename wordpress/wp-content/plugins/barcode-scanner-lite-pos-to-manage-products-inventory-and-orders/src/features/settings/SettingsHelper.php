@@ -1,0 +1,290 @@
+<?php
+
+namespace UkrSolution\BarcodeScanner\features\settings;
+
+use UkrSolution\BarcodeScanner\API\classes\RequestHelper;
+use UkrSolution\BarcodeScanner\API\classes\Users;
+use UkrSolution\BarcodeScanner\Database;
+
+class SettingsHelper
+{
+    private static $settingsFields = array();
+
+    public static $excludeOrderStatuses = array("checkout-draft", "auto-draft");
+
+    public static function init()
+    {
+    }
+
+    public static function is_plugin_active($plugin)
+    {
+        if (!function_exists('is_plugin_active')) {
+            return key_exists($plugin, get_plugins());
+        } else {
+            return is_plugin_active($plugin);
+        }
+    }
+
+    public static function stripslashesDeep(&$value, $dq = true, $field = "")
+    {
+        if (!$dq && is_string($value)) {
+            if (!in_array($field, array("afterSearchJavaScript", "modifyPreProcessSearchString")))
+                $value = str_replace('"', "'", $value);
+            $value = str_replace('\\', "", $value);
+        } else if (!$dq && is_array($value)) {
+            foreach ($value as $key => &$val) {
+                if (!in_array($key, array("receipt-template")))
+                    self::stripslashesDeep($val, $dq, $key);
+            }
+        }
+
+        return is_array($value) ? array_map('stripslashes_deep', $value) : stripslashes($value);
+    }
+
+    public static function generateRandomString($length = 10)
+    {
+        $characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        $charactersLength = strlen($characters);
+        $randomString = '';
+
+        for ($i = 0; $i < $length; $i++) {
+            $randomString .= $characters[wp_rand(0, $charactersLength - 1)];
+        }
+
+        return $randomString;
+    }
+
+    public static function getSettingsField($instant, $key = "", $asArray = false, $reSelectData = false)
+    {
+        global $wpdb;
+
+        if (!self::$settingsFields || $reSelectData) {
+            $table = $wpdb->prefix . Database::$settings;
+            // @codingStandardsIgnoreStart
+            self::$settingsFields = $wpdb->get_results("SELECT * FROM {$table} AS S;");
+            // @codingStandardsIgnoreEnd
+        }
+
+        $result = array();
+
+        if ($key) {
+            $result = null;
+
+            foreach (self::$settingsFields as $value) {
+                if ($value->field_name == $key) {
+                    $result = $value;
+                    break;
+                }
+            }
+            if ($result && $result->value && $result->type === "json") {
+                $jsonStr = $result->value;
+                $key = $result->field_name;
+
+                if (gettype($jsonStr) == "object") {
+                    $result->value = $asArray ? (array) $jsonStr : $jsonStr;
+                } else if (is_array($jsonStr)) {
+                    $result->value = $asArray ? (array) $jsonStr : (object) $jsonStr;
+                } else {
+                    $result->value = $asArray ? @json_decode($jsonStr, true) : @json_decode($jsonStr, false);
+                }
+            }
+
+            return $result;
+        }
+        else {
+            $result = array();
+
+            foreach (self::$settingsFields as $value) {
+                if ($value->type === "json") {
+                    $jsonStr = $value->value;
+                    $value->value = $asArray ? @json_decode($jsonStr, true) : @json_decode($jsonStr, false);
+                }
+
+                $result[] = $value;
+            }
+
+            return $result;
+        }
+    }
+
+    public static function restoreReceiptTemplate()
+    {
+        $file = USBS_PLUGIN_BASE_PATH . 'default-receipt-template.txt';
+
+        global $wp_filesystem;
+
+        if (!isset($wp_filesystem)) {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+            WP_Filesystem();
+        }
+
+        if ($wp_filesystem->exists($file)) {
+            $file_contents = $wp_filesystem->get_contents($file);
+
+            if (false !== $file_contents) {
+                $settings = new Settings();
+                $settings->updateSettings('receipt-template', $file_contents, 'text');
+                $settings->updateSettings('receipt-width', 55, 'text');
+            }
+        }
+    }
+
+    public static function getAjaxUrl()
+    {
+        return get_admin_url() . 'admin-ajax.php';
+    }
+
+    public static function getRequestUrl()
+    {
+        $ajaxUrl = self::getAjaxUrl();
+        $requestUrl = plugin_dir_url(USBS_PLUGIN_BASE_PATH . 'request.php') . 'request.php';
+
+        $ajaxUrlData = wp_parse_url($ajaxUrl);
+        $ajaxRequestUrlData = wp_parse_url($requestUrl);
+
+        return $ajaxRequestUrlData['scheme'] . '://' . $ajaxUrlData['host'] . $ajaxRequestUrlData['path'];
+    }
+
+    public static function getDownloadCsvUrl()
+    {
+        $ajaxUrl = self::getAjaxUrl();
+        $requestUrl = plugin_dir_url(USBS_PLUGIN_BASE_PATH . 'download-csv.php') . 'download-csv.php';
+
+        $ajaxUrlData = wp_parse_url($ajaxUrl);
+        $ajaxRequestUrlData = wp_parse_url($requestUrl);
+
+        return $ajaxRequestUrlData['scheme'] . '://' . $ajaxUrlData['host'] . $ajaxRequestUrlData['path'];
+    }
+
+    public static function dateTranslate($date)
+    {
+        $month = preg_replace('/([A-Za-z]+)\s.*/i', '$1', $date);
+
+
+        $monthTranslated = esc_html($month);
+
+        return str_replace($month, $monthTranslated, $date);
+    }
+
+    public static function getRolesList()
+    {
+        global $wp_roles, $wpdb;
+
+        $roles = $wp_roles ? $wp_roles->roles : array();
+
+        $table = $wpdb->prefix . Database::$interface;
+        // @codingStandardsIgnoreStart
+        $rolesFields = $wpdb->get_results("SELECT * FROM {$table} AS I GROUP BY I.role;");
+        // @codingStandardsIgnoreEnd
+
+        foreach ($roles as $role => &$value) {
+            foreach ($rolesFields as $field) {
+                if ($field->role == $role) {
+                    $value['bs_fields'] = true;
+                    break;
+                }
+            }
+        }
+
+        return $roles;
+    }
+
+    public static function getUploadMaxFilesize()
+    {
+        if (!function_exists("ini_get"))
+            return "";
+
+        $uploadMaxFilesize = ini_get('upload_max_filesize');
+
+        $val = trim($uploadMaxFilesize);
+        $last = strtolower($val[strlen($val) - 1]);
+        $number = (int) $val;
+
+        switch ($last) {
+            case 'g':
+                $number *= 1024;
+            case 'm':
+                $number *= 1024;
+            case 'k':
+                $number *= 1024;
+        }
+
+        return $number;
+    }
+
+    public static function updateSettings($request)
+    {
+        if ($request && $request->get_param("resultSortBy")) {
+            $resultSortBy = $request->get_param("resultSortBy");
+            $userId = Users::getUserId($request);
+            update_user_meta($userId, "search_results_sort_by", $resultSortBy);
+        }
+    }
+
+    public static function getSearchResultsSortBy($request)
+    {
+        $userId = Users::getUserId($request);
+        $resultSortBy = $userId ? get_user_meta($userId, "search_results_sort_by", true) : "relevance";
+        $resultSortBy = $resultSortBy ? $resultSortBy : "relevance";
+
+        return $resultSortBy;
+    }
+
+    public static function clearAllCaches()
+    {
+        try {
+            if (function_exists('w3tc_flush_all')) {
+                w3tc_flush_all();
+            }
+
+            if (function_exists('wp_cache_clear_cache')) {
+                wp_cache_clear_cache();
+            }
+
+            if (class_exists('WpFastestCache')) {
+                if (method_exists('WpFastestCache', 'deleteCache')) {
+                    $wpfc = new WpFastestCache();
+                    $wpfc->deleteCache();
+                }
+            }
+
+            if (function_exists('rocket_clean_domain')) {
+                rocket_clean_domain();
+            }
+
+            if (class_exists('LiteSpeed_Cache_API')) {
+                LiteSpeed_Cache_API::purge_all();
+            }
+
+            if (function_exists('nitropack_sdk_purge') && class_exists('\NitroPack\SDK\PurgeType')) {
+                nitropack_sdk_purge(NULL, NULL, 'Light purge of all caches', \NitroPack\SDK\PurgeType::LIGHT_PURGE);
+            }
+
+            \UkrSolution\BarcodeScanner\API\RequestHelper::logClear();
+        } catch (\Throwable $th) {
+        }
+    }
+
+    public static function getOrderStatuses()
+    {
+        if (!function_exists("wc_get_order_statuses")) {
+            return array();
+        }
+
+        $statuses = \wc_get_order_statuses();
+
+        try {
+            if (!$statuses) {
+                $statuses = array();
+            } else {
+                foreach ($statuses as $key => &$value) {
+                    $value = trim($value);
+                    $value = wp_strip_all_tags($value);
+                }
+            }
+        } catch (\Throwable $th) {
+        }
+
+        return $statuses;
+    }
+}

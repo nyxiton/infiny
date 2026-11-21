@@ -1,0 +1,437 @@
+<?php
+if (!defined('ABSPATH')) { exit; }
+
+/**
+ * Detect device type from a User-Agent string.
+ *
+ * @param string|null $ua Optional UA string. Falls back to $_SERVER['HTTP_USER_AGENT']
+ *                        for live visitor tracking when omitted/null.
+ * @return string 'mobile' | 'tablet' | 'desktop'
+ */
+function brikpanel_detect_device_type( $ua = null ) {
+    if ( $ua === null ) {
+        $ua = isset( $_SERVER['HTTP_USER_AGENT'] ) ? (string) $_SERVER['HTTP_USER_AGENT'] : '';
+    }
+    $ua = (string) $ua;
+
+    if ( $ua === '' ) {
+        return 'desktop';
+    }
+    if ( preg_match( '/iPad|Android(?!.*Mobile)|Tablet|Kindle|PlayBook/i', $ua ) ) {
+        return 'tablet';
+    }
+    if ( preg_match( '/Mobile|Android|iPhone|iPod|BlackBerry|IEMobile|Opera Mini|Windows Phone/i', $ua ) ) {
+        return 'mobile';
+    }
+    return 'desktop';
+}
+
+/**
+ * Classify a visit into a traffic-source channel from its referrer + landing URL.
+ *
+ * Channels: 'direct' | 'search' | 'social' | 'referral' | 'paid' | 'email'.
+ * These mirror the buckets shown on the dashboard "Traffic Sources" card.
+ *
+ * Resolution order (most specific first):
+ *   1. Campaign signals on the landing URL (UTM tags + ad click ids).
+ *   2. Empty referrer  -> direct.
+ *   3. Referrer on this same site (internal navigation) -> direct.
+ *   4. Referrer host brand lookup -> search / social, else referral.
+ *
+ * @param string $referrer    document.referrer reported by the tracker (may be empty).
+ * @param string $landing_url location.href of the landing page (carries UTM / click ids).
+ * @param string $site_host   Host of this site (treat internal navigation as direct).
+ * @return array{channel:string,host:string} `host` is the cleaned referrer domain,
+ *               '' for direct / no external host.
+ */
+function brikpanel_classify_traffic_source( $referrer, $landing_url = '', $site_host = '' ) {
+    $referrer    = is_string( $referrer ) ? trim( $referrer ) : '';
+    $landing_url = is_string( $landing_url ) ? $landing_url : '';
+
+    // --- Parse landing-URL query for campaign signals (UTM + ad click ids). ---
+    $utm_medium     = '';
+    $utm_source     = '';
+    $has_paid_click = false;
+    $has_fb_click   = false;
+    $query = (string) wp_parse_url( $landing_url, PHP_URL_QUERY );
+    if ( '' !== $query ) {
+        $params = [];
+        wp_parse_str( $query, $params );
+        $utm_medium     = isset( $params['utm_medium'] ) ? strtolower( trim( (string) $params['utm_medium'] ) ) : '';
+        $utm_source     = isset( $params['utm_source'] ) ? strtolower( trim( (string) $params['utm_source'] ) ) : '';
+        $has_paid_click = isset( $params['gclid'] ) || isset( $params['gclsrc'] ) || isset( $params['wbraid'] )
+            || isset( $params['gbraid'] ) || isset( $params['msclkid'] ) || isset( $params['ttclid'] );
+        $has_fb_click   = isset( $params['fbclid'] );
+    }
+
+    // Clean referrer host: lowercase, drop a leading "www.".
+    $ref_host = '';
+    if ( '' !== $referrer ) {
+        $ref_host = strtolower( (string) wp_parse_url( $referrer, PHP_URL_HOST ) );
+        if ( 0 === strpos( $ref_host, 'www.' ) ) {
+            $ref_host = substr( $ref_host, 4 );
+        }
+    }
+    $site_host = strtolower( (string) $site_host );
+    if ( 0 === strpos( $site_host, 'www.' ) ) {
+        $site_host = substr( $site_host, 4 );
+    }
+
+    // Host reported for grouping. Prefer the real referrer host; fall back to
+    // utm_source when campaign traffic arrived with no referrer (e.g. an app).
+    $host = $ref_host;
+    if ( '' === $host && '' !== $utm_source && false !== strpos( $utm_source, '.' ) ) {
+        $host = $utm_source;
+    }
+
+    // --- 1) Explicit campaign signals win. ---
+    $paid_mediums = [ 'cpc', 'ppc', 'paid', 'paidsearch', 'paid-search', 'cpm', 'cpv', 'display', 'banner', 'retargeting', 'remarketing' ];
+    if ( $has_paid_click || in_array( $utm_medium, $paid_mediums, true ) ) {
+        return [ 'channel' => 'paid', 'host' => $host ];
+    }
+    if ( in_array( $utm_medium, [ 'email', 'e-mail', 'newsletter' ], true )
+        || in_array( $utm_source, [ 'email', 'e-mail', 'newsletter', 'mailchimp', 'klaviyo', 'sendgrid' ], true ) ) {
+        return [ 'channel' => 'email', 'host' => $host ];
+    }
+    $social_mediums = [ 'social', 'social-media', 'social_media', 'social-network', 'social_network', 'sm', 'social-paid' ];
+    if ( in_array( $utm_medium, $social_mediums, true ) || $has_fb_click ) {
+        if ( '' === $host && $has_fb_click ) {
+            $host = 'facebook.com';
+        }
+        return [ 'channel' => 'social', 'host' => $host ];
+    }
+    if ( 'referral' === $utm_medium ) {
+        return [ 'channel' => 'referral', 'host' => $host ];
+    }
+    if ( 'organic' === $utm_medium ) {
+        return [ 'channel' => 'search', 'host' => $host ];
+    }
+
+    // --- 2) No referrer and no campaign -> direct. ---
+    if ( '' === $ref_host ) {
+        return [ 'channel' => 'direct', 'host' => '' ];
+    }
+
+    // --- 3) Internal navigation -> direct. ---
+    if ( '' !== $site_host
+        && ( $ref_host === $site_host || substr( $ref_host, - strlen( '.' . $site_host ) ) === '.' . $site_host ) ) {
+        return [ 'channel' => 'direct', 'host' => '' ];
+    }
+
+    // --- 4) Referrer host brand lookup. ---
+    $labels = explode( '.', $ref_host );
+
+    $search_brands = [ 'google', 'bing', 'yahoo', 'duckduckgo', 'yandex', 'baidu', 'ecosia', 'ask', 'aol', 'naver', 'seznam', 'startpage', 'qwant', 'brave' ];
+    foreach ( $labels as $label ) {
+        if ( in_array( $label, $search_brands, true ) ) {
+            return [ 'channel' => 'search', 'host' => $host ];
+        }
+    }
+
+    // Short / link-shortener social domains matched by exact suffix so they
+    // never collide with unrelated hosts (e.g. "foot.com" must not match "t.co").
+    $social_domains = [ 't.co', 'x.com', 'fb.me', 'wa.me', 't.me', 'youtu.be', 'lnkd.in' ];
+    foreach ( $social_domains as $d ) {
+        if ( $ref_host === $d || substr( $ref_host, - strlen( '.' . $d ) ) === '.' . $d ) {
+            return [ 'channel' => 'social', 'host' => $host ];
+        }
+    }
+    $social_brands = [ 'facebook', 'fb', 'instagram', 'twitter', 'linkedin', 'pinterest', 'reddit', 'youtube', 'tiktok', 'whatsapp', 'telegram', 'vk', 'snapchat', 'tumblr', 'quora', 'discord', 'threads' ];
+    foreach ( $labels as $label ) {
+        if ( in_array( $label, $social_brands, true ) ) {
+            return [ 'channel' => 'social', 'host' => $host ];
+        }
+    }
+
+    return [ 'channel' => 'referral', 'host' => $host ];
+}
+
+/**
+ * Records a single traffic-source hit for today.
+ *
+ * Upsert into wp_brikpanel_referrers keyed on (date, channel, host). The table
+ * carries a UNIQUE key so INSERT ... ON DUPLICATE KEY UPDATE is atomic and
+ * race-free. `direct` and campaign-without-referrer rows store host = ''.
+ *
+ * @param string $channel One of the brikpanel_classify_traffic_source channels.
+ * @param string $host    Cleaned referrer domain ('' for direct).
+ */
+function brikpanel_record_traffic_source( $channel, $host ) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'brikpanel_referrers';
+    $today = wp_date( 'Y-m-d' );
+
+    // Keep the indexed host column within bounds (190 chars, utf8mb4-safe).
+    if ( strlen( $host ) > 190 ) {
+        $host = substr( $host, 0, 190 );
+    }
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    $wpdb->query( $wpdb->prepare(
+        "INSERT INTO {$table} (date_column, channel, host, hits)
+         VALUES (%s, %s, %s, 1)
+         ON DUPLICATE KEY UPDATE hits = hits + 1",
+        $today,
+        $channel,
+        $host
+    ) );
+}
+
+/**
+ * Counts one visitor for today under their country, '' when it is not known
+ * (3.3.40). Called together with the day's visitor count, so a day's rows add
+ * up to its visitor_count the way the traffic sources do.
+ *
+ * Upsert on the (day, country) unique key. Only the two-letter code is
+ * stored, never the address it was found from.
+ *
+ * @param string $country Code from brikpanel_request_country(), or ''.
+ */
+function brikpanel_record_visitor_country( $country ) {
+    global $wpdb;
+    $country = ( is_string( $country ) && 1 === preg_match( '/^[A-Z]{2}$/', $country ) ) ? $country : '';
+    $table   = $wpdb->prefix . 'brikpanel_visitor_countries';
+
+    // A site whose database update has not run yet has no table: count
+    // nothing rather than print a database error into the tracker's answer.
+    $quiet = $wpdb->suppress_errors( true );
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    $wpdb->query( $wpdb->prepare(
+        "INSERT INTO {$table} (date_column, country, visitors)
+         VALUES (%s, %s, 1)
+         ON DUPLICATE KEY UPDATE visitors = visitors + 1",
+        wp_date( 'Y-m-d' ),
+        $country
+    ) );
+    $wpdb->suppress_errors( $quiet );
+}
+
+/**
+ * A campaign name as it is stored and compared: the way WooCommerce keeps
+ * utm_campaign on an order (sanitize_text_field), spaces collapsed, at most
+ * 100 characters. '' for nothing, and for "(none)", which WooCommerce's own
+ * tracking writes when there was no campaign.
+ *
+ * @param mixed $raw Campaign from a landing address or an order.
+ * @return string
+ */
+function brikpanel_campaign_normalize( $raw ) {
+    if ( ! is_scalar( $raw ) ) {
+        return '';
+    }
+    $name = trim( (string) preg_replace( '/\s+/u', ' ', sanitize_text_field( (string) $raw ) ) );
+    if ( '' === $name || '(none)' === $name ) {
+        return '';
+    }
+    return function_exists( 'brikpanel_substr' ) ? brikpanel_substr( $name, 0, 100 ) : substr( $name, 0, 100 );
+}
+
+/**
+ * Counts one visit from a campaign for today: the dashboard's "Top campaigns"
+ * divides that campaign's orders by these visits.
+ *
+ * The browser sends a campaign once per campaign a day (its own latch); the
+ * server adds the same once-a-day lock the visitor counter uses for a browser
+ * that keeps no cookie, one lock for all campaigns, so a stream of invented
+ * names cannot leave a lock row each. The endpoint takes no nonce (pages are
+ * cached), so a day takes at most 200 different campaign names: a known one
+ * still counts after that, a new one does not.
+ *
+ * Callers apply the master-switch / consent / admin / bot guards.
+ *
+ * @param mixed $raw Campaign as the browser read it from the landing address.
+ * @return string The stored name, or '' when nothing was stored.
+ */
+function brikpanel_record_campaign_visit( $raw ) {
+    global $wpdb;
+
+    $campaign = brikpanel_campaign_normalize( $raw );
+    if ( '' === $campaign ) {
+        return '';
+    }
+    if ( function_exists( 'brikpanel_daily_counter_allowed' ) && ! brikpanel_daily_counter_allowed( 'campaign' ) ) {
+        return '';
+    }
+
+    $table = $wpdb->prefix . 'brikpanel_campaign_visits';
+    $today = wp_date( 'Y-m-d' );
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    $updated = $wpdb->query( $wpdb->prepare( "UPDATE {$table} SET hits = hits + 1 WHERE date_column = %s AND campaign = %s", $today, $campaign ) );
+    if ( $updated ) {
+        return $campaign;
+    }
+    if ( false === $updated ) {
+        return '';
+    }
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    $names_today = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE date_column = %s", $today ) );
+    if ( $names_today >= 200 ) {
+        return '';
+    }
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    $wpdb->query( $wpdb->prepare(
+        "INSERT INTO {$table} (date_column, campaign, hits)
+         VALUES (%s, %s, 1)
+         ON DUPLICATE KEY UPDATE hits = hits + 1",
+        $today,
+        $campaign
+    ) );
+    return $campaign;
+}
+
+/**
+ * Records a visitor hit including device-type breakdown.
+ *
+ * Atomic INSERT...ON DUPLICATE KEY UPDATE replaces the previous SELECT-then-
+ * UPDATE pattern. That avoids:
+ *   - the race condition where two concurrent visitors read the same count
+ *     and both write count+1, losing one increment;
+ *   - the extra SELECT round-trip on every page view.
+ *
+ * Requires a UNIQUE key on date_column for ON DUPLICATE KEY UPDATE to fire.
+ *
+ * Shared by the unified tracker endpoint and the legacy standalone AJAX
+ * action below. Callers apply the master-switch / admin / bot guards.
+ *
+ * @param string $referrer    document.referrer reported by the tracker.
+ * @param string $landing_url location.href of the landing page.
+ * @param bool   $apply_gate  Run the 3.3.11 once-a-day cap here. The 3.3.30
+ *                            tracker passes false: it already decided from the
+ *                            "this is a person" mark, which counts once a day
+ *                            on the server's own clock.
+ */
+function brikpanel_record_visitor_view( $referrer = '', $landing_url = '', $apply_gate = true ) {
+    // Server-side once-per-day cap (3.3.11). The browser's local-storage latch
+    // is the only reason this used to fire once a day, and a client that
+    // starts every page with a blank profile never carries it: each page it
+    // opened became a new visitor, plus a traffic-source hit and a device
+    // hit below. A client with no memory of us now gets one count per
+    // identity per day; returning browsers and signed-in users are untouched.
+    if ( $apply_gate && function_exists( 'brikpanel_daily_counter_allowed' ) && ! brikpanel_daily_counter_allowed( 'visitor' ) ) {
+        return;
+    }
+
+    global $wpdb;
+    $table       = $wpdb->prefix . 'brikpanel_visitors';
+    $today       = wp_date( 'Y-m-d' );
+    $device      = brikpanel_detect_device_type();
+    $device_col  = $device . '_count';
+    $valid_cols  = [ 'mobile_count', 'tablet_count', 'desktop_count' ];
+    if ( ! in_array( $device_col, $valid_cols, true ) ) {
+        $device_col = 'desktop_count';
+    }
+
+    // UPDATE first; if no row exists for today, INSERT. One DB round-trip in
+    // the common case (existing row) instead of the previous SELECT+UPDATE.
+    // The schema has a non-unique KEY on date_column, so we can't use ON
+    // DUPLICATE KEY UPDATE without a migration.
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    $updated = $wpdb->query( $wpdb->prepare(
+        "UPDATE {$table}
+            SET visitor_count = visitor_count + 1,
+                {$device_col} = {$device_col} + 1
+          WHERE date_column = %s",
+        $today
+    ) );
+
+    if ( ! $updated ) {
+        $wpdb->insert(
+            $table,
+            [
+                'date_column'   => $today,
+                'visitor_count' => 1,
+                $device_col     => 1,
+            ],
+            [ '%s', '%d', '%d' ]
+        );
+    }
+
+    // Record the traffic-source channel for the same visit. The tracker fires
+    // once per visitor per day (localStorage), so this captures the first-touch
+    // referrer of the day, matching the visitor_count semantics above.
+    $site_host = (string) wp_parse_url( home_url(), PHP_URL_HOST );
+    $source    = brikpanel_classify_traffic_source( $referrer, $landing_url, $site_host );
+    brikpanel_record_traffic_source( $source['channel'], $source['host'] );
+
+    // And the country of the same visit, for the dashboard's Locations card.
+    if ( function_exists( 'brikpanel_request_country' ) ) {
+        brikpanel_record_visitor_country( brikpanel_request_country() );
+    }
+}
+
+/**
+ * Legacy standalone AJAX action (pre-3.2.20 tracker JS). New pages ship the
+ * unified tracker; this stays registered for cached pages still carrying the
+ * old inline JS.
+ */
+function brikpanel_visitor_view() {
+    // Master tracking switch and cookie-consent gate — also guards pings from
+    // cached pages that still carry the old tracker JS after the merchant
+    // turned tracking off or switched the consent gate on.
+    if ( function_exists( 'brikpanel_frontend_tracking_allowed' ) && ! brikpanel_frontend_tracking_allowed( 'endpoint' ) ) {
+        wp_send_json_success();
+    }
+    // Counted the old way only while caches may still serve the old script
+    // (3.3.30); afterwards a request that never proved a person is refused.
+    if ( function_exists( 'brikpanel_legacy_tracker_allowed' ) && ! brikpanel_legacy_tracker_allowed() ) {
+        wp_send_json_success();
+    }
+    if ( brikpanel_is_admin_user() ) {
+        wp_send_json_success();
+    }
+    if ( function_exists( '_brikpanel_is_bot_ua' ) && _brikpanel_is_bot_ua() ) {
+        wp_send_json_success();
+    }
+
+    $referrer    = isset( $_POST['ref'] ) ? esc_url_raw( wp_unslash( $_POST['ref'] ) ) : '';
+    $landing_url = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';
+    brikpanel_record_visitor_view( $referrer, $landing_url );
+
+    wp_send_json_success();
+}
+add_action('wp_ajax_nopriv_brikpanel_visitor_view', 'brikpanel_visitor_view');
+add_action('wp_ajax_brikpanel_visitor_view', 'brikpanel_visitor_view');
+
+// The inline visitor-view tracker JS moved into the unified tracker
+// (back-end/tracking/brikpanel-unified-tracker.php) in 3.2.20.
+
+/**
+ * ANA YARDIMCI FONKSİYON
+ * Belirtilen tarih aralığındaki toplam ziyaretçi sayısını hesaplar.
+ *
+ * @param string|null $start_date Başlangıç tarihi (Y-m-d formatında).
+ * @param string|null $end_date Bitiş tarihi (Y-m-d formatında).
+ * @return int Toplam ziyaretçi sayısı.
+ */
+function brikpanel_get_visitor_count($start_date = null, $end_date = null) {
+    $cache_key = 'bp_vc_' . brikpanel_data_cache_ver() . '_' . md5( $start_date . $end_date );
+    $cached    = get_transient( $cache_key );
+    if ( false !== $cached ) {
+        return (int) $cached;
+    }
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . "brikpanel_visitors";
+
+    if ($start_date && $end_date) {
+        $total_visitors = $wpdb->get_var($wpdb->prepare(
+            "SELECT SUM(visitor_count) FROM {$table_name} WHERE date_column BETWEEN %s AND %s",
+            $start_date,
+            $end_date
+        ));
+    } elseif ($start_date) {
+        $total_visitors = $wpdb->get_var($wpdb->prepare(
+            "SELECT SUM(visitor_count) FROM {$table_name} WHERE date_column = %s",
+            $start_date
+        ));
+    } else {
+        $total_visitors = $wpdb->get_var("SELECT SUM(visitor_count) FROM {$table_name}");
+    }
+
+    $result = is_null($total_visitors) ? 0 : (int) $total_visitors;
+    set_transient( $cache_key, $result, brikpanel_cache_ttl( 60 ) );
+    return $result;
+}
