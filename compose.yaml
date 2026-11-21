@@ -16,6 +16,7 @@ services:
     volumes:
       - wordpress_mariadb_data:/var/www/html
       - ./wordpress/wp-content/themes/infiny-noir-or:/var/www/html/wp-content/themes/infiny-noir-or
+      - ./wordpress/wp-content/plugins:/var/www/html/wp-content/plugins
     depends_on:
       mariadb:
         condition: service_healthy
@@ -37,6 +38,7 @@ services:
     volumes:
       - wordpress_copy_data:/var/www/html
       - ./wordpress-1/wp-content:/var/www/html/wp-content
+      - ./wordpress-1/wordpress-1/wp-content/plugins:/var/www/html/wp-content/plugins
     depends_on:
       mariadb-copy:
         condition: service_healthy
@@ -51,6 +53,7 @@ services:
     volumes:
       - wordpress_copy_data:/var/www/html
       - ./wordpress-1/wp-content:/var/www/html/wp-content
+      - ./wordpress-1/wordpress-1/wp-content/plugins:/var/www/html/wp-content/plugins
     depends_on:
       mariadb-copy:
         condition: service_healthy
