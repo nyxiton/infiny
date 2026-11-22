@@ -28,6 +28,7 @@ require_once __DIR__ . '/order-board.php';
 require_once __DIR__ . '/dashboard.php';
 require_once __DIR__ . '/expenses.php';
 require_once __DIR__ . '/finance.php';
+require_once __DIR__ . '/restock.php';
 
 add_action('admin_menu', function () {
     if (can_manage()) {
@@ -138,7 +139,9 @@ function render(): void {
             esc_url(url($key)), $key === $tab ? ' aria-current="page"' : '', esc_attr($icons[$key]), esc_html($label));
     }
     $new_order = $tab === 'commandes' && input($_GET, 'nouveau') === '1';
-    echo '</nav></header><main><h1>' . esc_html($new_order ? 'Nouvelle commande' : TABS[$tab]) . '</h1>';
+    $restock = $tab === 'stock' && input($_GET, 'historique') === 'reassorts';
+    $title = $restock ? 'Historique des réassorts' : ($new_order ? 'Nouvelle commande' : TABS[$tab]);
+    echo '</nav></header><main><h1>' . esc_html($title) . '</h1>';
 
     if (!class_exists('WooCommerce')) {
         echo '<div class="notice notice-warning inline"><p>Activez WooCommerce pour gérer votre boutique.</p></div>';
@@ -159,7 +162,9 @@ function render(): void {
         switch ($tab) {
             case 'produits':
             case 'stock':
-                if ($id || input($_GET, 'nouveau') === '1') {
+                if ($restock) {
+                    restock_history(absint(input($_GET, 'produit')));
+                } elseif ($id || input($_GET, 'nouveau') === '1') {
                     product_form($tab, $id);
                 } else {
                     products($tab);
@@ -242,6 +247,7 @@ function products(string $tab): void {
             button('Ajouter un produit', url($tab, ['nouveau' => 1]), true);
         }
         if ($tab === 'stock') {
+            button('Historique des réassorts', restock_url());
             if ($rupture || $low) {
                 button('Voir tout le stock', url('stock'));
             }
@@ -340,13 +346,21 @@ function product_form(string $tab, int $id): void {
     }
     $stock_only = $tab === 'stock' && $id;
     $photos = array_filter(array_merge([$product->get_image_id()], $product->get_gallery_image_ids()));
+    echo '<div class="ib-toolbar">';
     button('Retour à la liste', url($tab));
+    if ($stock_only) {
+        button('Historique de ce produit', restock_url($id));
+    }
+    echo '</div>';
     ?>
     <form class="ib-panel" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" method="post" enctype="multipart/form-data">
         <h3><?php echo esc_html($id ? $product->get_name() : 'Nouveau produit'); ?></h3>
         <input type="hidden" name="action" value="infiny_boutique_product">
         <input type="hidden" name="id" value="<?php echo esc_attr($id); ?>">
         <input type="hidden" name="vue" value="<?php echo esc_attr($tab); ?>">
+        <?php if ($id) : ?>
+            <input type="hidden" name="stock_initial" value="<?php echo esc_attr($product->get_stock_quantity('edit') ?? ''); ?>">
+        <?php endif; ?>
         <?php wp_nonce_field('ib-product-' . $id); ?>
         <div class="ib-fields">
             <?php if (!$stock_only) : ?>
@@ -420,6 +434,15 @@ add_action('admin_post_infiny_boutique_product', function () {
     if (($stock === '' && ($stock_only || !$id)) || ($stock !== '' && filter_var($stock, FILTER_VALIDATE_INT) === false)) {
         finish($destination, 'Saisissez un stock en nombre entier.');
     }
+    $stock_before = $id ? $product->get_stock_quantity('edit') : null;
+    if ($id && $stock !== '' && isset($_POST['stock_initial'])) {
+        $initial = input($_POST, 'stock_initial');
+        if (!$stock_only && $initial !== '' && (float) $stock === (float) $initial) {
+            $stock = '';
+        } elseif ($initial !== (string) $stock_before) {
+            finish($destination, 'Le stock a changé depuis l’ouverture du formulaire. Vérifiez la quantité actuelle avant de réessayer.');
+        }
+    }
 
     try {
         if (!$stock_only) {
@@ -467,6 +490,10 @@ add_action('admin_post_infiny_boutique_product', function () {
     }
 
     $destination = url($tab, ['id' => $id]);
+    if ($stock !== '' && $stock_before !== null && $product->get_stock_quantity('edit') > $stock_before &&
+        !record_restock($product, $stock_before)) {
+        finish($destination, 'Le stock a été mis à jour, mais l’entrée d’historique n’a pas pu être enregistrée.');
+    }
     if (!$stock_only && current_user_can('upload_files')) {
         $photo_error = save_photos($product);
         if ($photo_error) {
