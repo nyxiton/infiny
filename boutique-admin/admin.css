@@ -734,7 +734,7 @@ a.ib-product-card:hover {
 }
 
 .ib-dashboard-layout {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .ib-dashboard-card {
@@ -862,6 +862,10 @@ a.ib-product-card:hover {
     font-variant-numeric: tabular-nums;
 }
 
+.ib-restock-metrics dd {
+    font-weight: 650;
+}
+
 .ib-sales-chart {
     display: flex;
     gap: clamp(2px, 1vw, 12px);
@@ -924,7 +928,6 @@ a.ib-product-card:hover {
 
 @media (max-width: 940px) {
     .ib-dashboard-overview { grid-template-columns: minmax(0, 1fr); }
-    .ib-dashboard-layout { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 620px) {

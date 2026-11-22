@@ -16,6 +16,7 @@ function dashboard(): void {
     $current = dashboard_sales($start, $now, $days, $currency);
     $previous = dashboard_sales($previous_start, $previous_end, $days, $currency);
     $stock = dashboard_stock();
+    $restocks = restock_summary($start, $now);
     $pending = wc_orders_count('pending');
     $hold = wc_orders_count('on-hold');
     $processing = wc_orders_count('processing');
@@ -130,6 +131,23 @@ function dashboard(): void {
                     <p class="ib-dashboard-caption">Montants avant remboursements, selon le moyen saisi sur la commande. Le panier moyen utilise aussi les montants avant remboursements.</p>
                 <?php else : ?>
                     <p class="ib-dashboard-caption">Aucun paiement enregistré sur cette période.</p>
+                <?php endif; ?>
+            </section>
+            <section class="ib-dashboard-card">
+                <div class="ib-dashboard-section-header">
+                    <h3>Réassorts sur la période</h3>
+                    <?php button('Voir l’historique', restock_url()); ?>
+                </div>
+                <dl class="ib-dashboard-list ib-restock-metrics">
+                    <div><dt>Réassorts</dt><dd><?php echo esc_html(number_format_i18n($restocks['count'])); ?></dd></div>
+                    <div><dt>Unités ajoutées</dt><dd><?php echo esc_html(wc_format_localized_decimal($restocks['units'])); ?></dd></div>
+                    <div><dt>Produits réassortis</dt><dd><?php echo esc_html(number_format_i18n($restocks['products'])); ?></dd></div>
+                </dl>
+                <?php if ($latest = $restocks['latest']) : ?>
+                    <p class="ib-dashboard-caption">Dernier réassort : <?php echo esc_html($latest['name']); ?>
+                        (+<?php echo esc_html(wc_format_localized_decimal($latest['quantity'])); ?>) · <?php echo esc_html($latest['date']); ?></p>
+                <?php else : ?>
+                    <p class="ib-dashboard-caption">Aucun réassort enregistré sur cette période.</p>
                 <?php endif; ?>
             </section>
         </div>

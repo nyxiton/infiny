@@ -31,6 +31,50 @@ function record_restock(\WC_Product $product, $before): bool {
     return !is_wp_error($id) && $id > 0;
 }
 
+function restock_details(int $entry_id): ?array {
+    $details = get_post_meta($entry_id, RESTOCK_META, true);
+    if (!is_array($details) || !is_numeric($details['before'] ?? null) ||
+        !is_numeric($details['after'] ?? null) || $details['after'] <= $details['before']) {
+        return null;
+    }
+    return $details;
+}
+
+function restock_summary(\DateTimeImmutable $start, \DateTimeImmutable $end): array {
+    $entries = get_posts([
+        'post_type' => RESTOCK_TYPE,
+        'post_status' => 'private',
+        'posts_per_page' => -1,
+        'orderby' => ['date' => 'DESC', 'ID' => 'DESC'],
+        'date_query' => [[
+            'after' => $start->format('Y-m-d H:i:s'),
+            'before' => $end->format('Y-m-d H:i:s'),
+            'inclusive' => true,
+        ]],
+    ]);
+    $summary = ['count' => 0, 'units' => 0, 'products' => 0, 'latest' => null];
+    $products = [];
+    foreach ($entries as $entry) {
+        $details = restock_details($entry->ID);
+        if (!$details) {
+            continue;
+        }
+        $quantity = $details['after'] - $details['before'];
+        ++$summary['count'];
+        $summary['units'] += $quantity;
+        if ($entry->post_parent) {
+            $products[$entry->post_parent] = true;
+        }
+        $summary['latest'] ??= [
+            'name' => $entry->post_title,
+            'quantity' => $quantity,
+            'date' => get_post_time('d/m/Y H:i', false, $entry),
+        ];
+    }
+    $summary['products'] = count($products);
+    return $summary;
+}
+
 function restock_history(int $product_id): void {
     $args = [
         'post_type' => RESTOCK_TYPE,
@@ -63,8 +107,8 @@ function restock_history(int $product_id): void {
             <thead><tr><th>Date</th><th>Produit</th><th>Référence</th><th>Ajouté</th><th>Avant</th><th>Après</th><th>Par</th></tr></thead>
             <tbody>
                 <?php foreach ($query->posts as $entry) :
-                    $details = get_post_meta($entry->ID, RESTOCK_META, true);
-                    if (!is_array($details) || !isset($details['before'], $details['after'])) {
+                    $details = restock_details($entry->ID);
+                    if (!$details) {
                         continue;
                     }
                     $author = get_userdata($entry->post_author);
@@ -72,7 +116,7 @@ function restock_history(int $product_id): void {
                     <tr>
                         <td><?php echo esc_html(get_post_time('d/m/Y H:i', false, $entry)); ?></td>
                         <td><?php echo esc_html($entry->post_title); ?></td>
-                        <td><?php echo esc_html($details['sku'] ?: '—'); ?></td>
+                        <td><?php echo esc_html(($details['sku'] ?? '') ?: '—'); ?></td>
                         <td><strong class="ib-pill">+<?php echo esc_html(wc_format_localized_decimal($details['after'] - $details['before'])); ?></strong></td>
                         <td><?php echo esc_html(wc_format_localized_decimal($details['before'])); ?></td>
                         <td><?php echo esc_html(wc_format_localized_decimal($details['after'])); ?></td>
