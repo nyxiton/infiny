@@ -20,6 +20,12 @@ function url(string $tab = 'accueil', array $args = []): string {
     return add_query_arg(['boutique' => '1'] + ($tab === 'accueil' ? [] : ['vue' => $tab]) + $args, home_url('/'));
 }
 
+add_action('admin_menu', function () {
+    if (can_manage()) {
+        add_menu_page('Gestion de la boutique', 'Boutique', 'manage_options', MENU, '', 'dashicons-store', 3);
+    }
+});
+
 add_action('admin_init', function () {
     if (input($_GET, 'page') === MENU) {
         wp_safe_redirect(url(input($_GET, 'vue') ?: 'accueil', array_filter(['id' => absint(input($_GET, 'id'))])));
