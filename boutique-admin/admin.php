@@ -22,16 +22,16 @@ function url(string $tab = 'accueil', array $args = []): string {
 
 add_action('admin_menu', function () {
     if (can_manage()) {
-        add_menu_page('Gestion de la boutique', 'Boutique', 'manage_options', MENU, '', 'dashicons-store', 3);
+        $redirect = __NAMESPACE__ . '\\redirect_to_boutique';
+        $hook = add_menu_page('Gestion de la boutique', 'Boutique', 'manage_options', MENU, $redirect, 'dashicons-store', 3);
+        add_action('load-' . $hook, $redirect);
     }
 });
 
-add_action('admin_init', function () {
-    if (input($_GET, 'page') === MENU) {
-        wp_safe_redirect(url(input($_GET, 'vue') ?: 'accueil', array_filter(['id' => absint(input($_GET, 'id'))])));
-        exit;
-    }
-});
+function redirect_to_boutique(): void {
+    wp_safe_redirect(url(input($_GET, 'vue') ?: 'accueil', array_filter(['id' => absint(input($_GET, 'id'))])));
+    exit;
+}
 
 add_action('template_redirect', function () {
     if (input($_GET, 'boutique') !== '1') {
