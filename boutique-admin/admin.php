@@ -11,6 +11,7 @@ const TABS = [
     'categories' => 'Catégories',
     'stock' => 'Stock',
     'commandes' => 'Commandes',
+    'clients' => 'Clients',
     'depenses' => 'Dépenses',
     'finances' => 'Suivi financier',
 ];
@@ -29,6 +30,7 @@ require_once __DIR__ . '/dashboard.php';
 require_once __DIR__ . '/expenses.php';
 require_once __DIR__ . '/finance.php';
 require_once __DIR__ . '/restock.php';
+require_once __DIR__ . '/clients.php';
 
 add_action('admin_menu', function () {
     if (can_manage()) {
@@ -127,6 +129,7 @@ function render(): void {
         'categories' => 'category',
         'stock' => 'archive',
         'commandes' => 'cart',
+        'clients' => 'groups',
         'depenses' => 'money-alt',
         'finances' => 'chart-area',
     ];
@@ -172,6 +175,9 @@ function render(): void {
                 break;
             case 'categories':
                 categories($id);
+                break;
+            case 'clients':
+                clients($id);
                 break;
             case 'depenses':
                 expenses($id);
@@ -584,11 +590,15 @@ function new_order_form(): void {
     }
 
     $controller = \wc_get_container()->get(\Automattic\WooCommerce\Internal\Admin\Orders\PageController::class);
-    $editor = $controller->get_new_page_url();
+    $editor = add_query_arg([
+        'ib_boutique' => 1,
+        'ib_client' => absint(input($_GET, 'client')),
+    ], $controller->get_new_page_url());
     $script = add_query_arg('ver', filemtime(__DIR__ . '/order-editor.js'), content_url('mu-plugins/boutique-admin/order-editor.js'));
     ?>
     <div class="ib-toolbar">
         <?php button('Retour aux commandes', url('commandes')); ?>
+        <?php button('Créer un client', url('clients', ['pour_commande' => 'nouvelle'])); ?>
     </div>
     <iframe id="ib-order-editor" class="ib-order-editor" title="Formulaire de commande WooCommerce"
         src="<?php echo esc_url($editor); ?>"></iframe>
@@ -612,7 +622,7 @@ function order_table(array $orders): void {
         echo '<tr><td>';
         button('#' . $order->get_order_number(), url('commandes', ['id' => $order->get_id()]));
         echo '</td><td>' . esc_html($date ? wc_format_datetime($date, 'd/m/Y H:i') : '—') . '</td>';
-        echo '<td>' . esc_html($order->get_formatted_billing_full_name() ?: '—') . '</td>';
+        echo '<td>' . esc_html(order_client_name($order) ?: '—') . '</td>';
         echo '<td>' . money($order->get_total(), ['currency' => $order->get_currency()]) . '</td>';
         echo '<td><span class="ib-pill">' . esc_html($labels['wc-' . $order->get_status()] ?? $order->get_status()) . '</span></td></tr>';
     }
@@ -635,7 +645,7 @@ function order_detail(int $id): void {
     ?>
     <section class="ib-panel">
         <h3>Commande #<?php echo esc_html($order->get_order_number()); ?></h3>
-        <p><?php echo esc_html($order->get_formatted_billing_full_name() ?: 'Client non renseigné'); ?></p>
+        <?php order_client_section($order); ?>
         <p>Statut actuel <strong><?php echo esc_html($labels[$status] ?? $status); ?></strong></p>
         <div class="ib-table"><table><thead><tr><th>Produit</th><th>Quantité</th><th>Montant</th></tr></thead><tbody>
             <?php foreach ($order->get_items() as $item) : ?>
