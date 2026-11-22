@@ -360,3 +360,51 @@
     .ib-toolbar form input[type="search"] { flex: 1 1 120px; min-width: 0; }
     .ib th, .ib td { padding: 9px 11px; }
 }
+
+.ib-order-editor {
+    display: block;
+    width: 100%;
+    height: clamp(31rem, 76dvh, 65rem);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+}
+
+html.ib-embedded-order {
+    padding-top: 0 !important;
+    background: #fff;
+}
+
+.ib-embedded-order :is(#adminmenumain, #wpadminbar, #wpfooter, #screen-meta-links) {
+    display: none;
+}
+
+.ib-embedded-order #wpwrap {
+    min-height: 0;
+}
+
+.ib-embedded-order #wpcontent {
+    margin-left: 0;
+    padding-left: 16px;
+}
+
+.ib-embedded-order #wpbody {
+    padding-top: 0;
+}
+
+.ib-embedded-order #wpbody-content {
+    padding-bottom: 0;
+}
+
+.ib-category-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    gap: 8px 16px;
+    max-height: 13rem;
+    overflow-y: auto;
+    margin-bottom: 12px;
+}
+
+.ib-panel .ib-category-options label {
+    font-weight: 400;
+}

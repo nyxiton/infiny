@@ -8,6 +8,7 @@ const MENU = 'infiny-boutique';
 const TABS = [
     'accueil' => 'Tableau de bord',
     'produits' => 'Produits',
+    'categories' => 'Catégories',
     'stock' => 'Stock',
     'commandes' => 'Commandes',
 ];
@@ -19,6 +20,8 @@ function can_manage(): bool {
 function url(string $tab = 'accueil', array $args = []): string {
     return add_query_arg(['boutique' => '1'] + ($tab === 'accueil' ? [] : ['vue' => $tab]) + $args, home_url('/'));
 }
+
+require_once __DIR__ . '/categories.php';
 
 add_action('admin_menu', function () {
     if (can_manage()) {
@@ -59,7 +62,7 @@ add_action('template_redirect', function () {
         <meta charset="<?php echo esc_attr(get_bloginfo('charset')); ?>">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Gestion de la boutique</title>
-        <link rel="stylesheet" href="<?php echo esc_url($css); ?>">
+        <link id="ib-styles" rel="stylesheet" href="<?php echo esc_url($css); ?>">
     </head>
     <body class="ib-page">
         <?php render(); ?>
@@ -117,7 +120,8 @@ function render(): void {
     foreach (TABS as $key => $label) {
         printf('<a href="%s"%s>%s</a>', esc_url(url($key)), $key === $tab ? ' aria-current="page"' : '', esc_html($label));
     }
-    echo '</nav><main><h2>' . esc_html(TABS[$tab]) . '</h2>';
+    $new_order = $tab === 'commandes' && input($_GET, 'nouveau') === '1';
+    echo '</nav><main><h2>' . esc_html($new_order ? 'Nouvelle commande' : TABS[$tab]) . '</h2>';
 
     if (!class_exists('WooCommerce')) {
         echo '<div class="notice notice-warning inline"><p>Activez WooCommerce pour gérer votre boutique.</p></div>';
@@ -144,8 +148,17 @@ function render(): void {
                     products($tab);
                 }
                 break;
+            case 'categories':
+                categories($id);
+                break;
             case 'commandes':
-                $id ? order_detail($id) : orders();
+                if ($new_order) {
+                    new_order_form();
+                } elseif ($id) {
+                    order_detail($id);
+                } else {
+                    orders();
+                }
                 break;
             default:
                 dashboard();
@@ -287,6 +300,9 @@ function product_form(string $tab, int $id): void {
                 <?php if ($id && !$product->managing_stock()) : ?><small>Saisissez une quantité pour activer le suivi.</small><?php endif; ?>
             </label>
         </div>
+        <?php if (!$stock_only && current_user_can('assign_product_terms')) {
+            product_categories($product);
+        } ?>
         <?php if (!$stock_only && current_user_can('upload_files')) : ?>
             <fieldset><legend>Photos</legend>
                 <?php if ($photos) : ?>
@@ -363,6 +379,13 @@ add_action('admin_post_infiny_boutique_product', function () {
                 $product->update_meta_data('_infiny_purchase_price', $buy);
             }
             $product->set_cogs_value($buy === null ? null : (float) $buy);
+            if (current_user_can('assign_product_terms') && input($_POST, 'categories_presentes') === '1') {
+                $ids = submitted_categories();
+                if (is_wp_error($ids)) {
+                    finish($destination, 'La catégorie n’a pas pu être créée. Vérifiez son nom.');
+                }
+                $product->set_category_ids($ids);
+            }
         }
         if ($stock !== '') {
             $product->set_manage_stock(true);
@@ -449,12 +472,35 @@ function orders(): void {
             <button class="button">Filtrer</button>
         </form>
         <?php if (current_user_can('publish_shop_orders')) {
-            button('Nouvelle commande', \wc_get_container()->get(\Automattic\WooCommerce\Internal\Admin\Orders\PageController::class)->get_new_page_url(), true);
+            button('Nouvelle commande', url('commandes', ['nouveau' => 1]), true);
         } ?>
     </div>
     <?php
     order_table($result->orders);
     pagination('commandes', (int) $result->max_num_pages, ['statut' => $status, 'jour' => $day]);
+}
+
+function new_order_form(): void {
+    if (!current_user_can('publish_shop_orders')) {
+        echo '<p class="ib-empty" role="alert">Vous n’avez pas l’autorisation de créer une commande.</p>';
+        return;
+    }
+
+    $controller = \wc_get_container()->get(\Automattic\WooCommerce\Internal\Admin\Orders\PageController::class);
+    $editor = $controller->get_new_page_url();
+    $script = add_query_arg('ver', filemtime(__DIR__ . '/order-editor.js'), content_url('mu-plugins/boutique-admin/order-editor.js'));
+    ?>
+    <div class="ib-toolbar">
+        <?php button('Retour aux commandes', url('commandes')); ?>
+    </div>
+    <iframe id="ib-order-editor" class="ib-order-editor" title="Formulaire de commande WooCommerce"
+        src="<?php echo esc_url($editor); ?>"></iframe>
+    <p id="ib-order-editor-fallback" hidden>
+        Le formulaire intégré est indisponible.
+        <a href="<?php echo esc_url($editor); ?>">Ouvrir le formulaire dans WooCommerce</a>
+    </p>
+    <script src="<?php echo esc_url($script); ?>" defer></script>
+    <?php
 }
 
 function order_table(array $orders): void {
