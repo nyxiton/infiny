@@ -62,6 +62,9 @@ add_action('template_redirect', function () {
         <meta charset="<?php echo esc_attr(get_bloginfo('charset')); ?>">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Gestion de la boutique</title>
+        <?php if ((TABS[input($_GET, 'vue')] ?? TABS['accueil']) === TABS['accueil']) : ?>
+            <link rel="stylesheet" href="<?php echo esc_url(includes_url('css/dashicons.min.css')); ?>">
+        <?php endif; ?>
         <link id="ib-styles" rel="stylesheet" href="<?php echo esc_url($css); ?>">
     </head>
     <body class="ib-page">
@@ -168,6 +171,27 @@ function render(): void {
 }
 
 function dashboard(): void {
+    $sections = [
+        'produits' => 'tag',
+        'categories' => 'category',
+        'stock' => 'archive',
+        'commandes' => 'cart',
+    ];
+    echo '<nav class="ib-launcher" aria-label="Rubriques de la boutique">';
+    foreach ($sections as $tab => $icon) {
+        if ($tab === 'categories' && !current_user_can('manage_product_terms')) {
+            continue;
+        }
+        printf(
+            '<a href="%s" class="ib-tile ib-tile-%s"><span class="ib-tile-icon dashicons dashicons-%s" aria-hidden="true"></span><strong>%s</strong></a>',
+            esc_url(url($tab)),
+            esc_attr($tab),
+            esc_attr($icon),
+            esc_html(TABS[$tab])
+        );
+    }
+    echo '</nav>';
+
     $out = wc_get_products(['stock_status' => 'outofstock', 'status' => 'publish', 'limit' => 1, 'paginate' => true]);
     $today = current_datetime()->format('Y-m-d');
     $today_orders = wc_get_orders([
@@ -185,10 +209,12 @@ function dashboard(): void {
         printf('<a href="%s"><span>%s</span><strong>%s</strong></a>', esc_url($href), esc_html($label), esc_html(number_format_i18n($total)));
     }
     echo '</div><div class="ib-toolbar">';
-    if (current_user_can('publish_products')) {
-        button('Ajouter un produit', url('produits', ['nouveau' => 1]), true);
+    if (current_user_can('publish_shop_orders')) {
+        button('Nouvelle commande', url('commandes', ['nouveau' => 1]), true);
     }
-    button('Voir les commandes', url('commandes'));
+    if (current_user_can('publish_products')) {
+        button('Ajouter un produit', url('produits', ['nouveau' => 1]));
+    }
     echo '</div><h3>Dernières commandes</h3>';
     order_table(wc_get_orders(['limit' => 5, 'orderby' => 'date', 'order' => 'DESC']));
 }

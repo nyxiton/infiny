@@ -408,3 +408,56 @@ html.ib-embedded-order {
 .ib-panel .ib-category-options label {
     font-weight: 400;
 }
+
+.ib-launcher {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: clamp(8px, 1.5vw, 16px);
+    margin-bottom: clamp(20px, 3vw, 32px);
+}
+
+.ib-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    min-width: 0;
+    padding: clamp(14px, 2vw, 24px);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.ib-tile:hover {
+    border-color: var(--tile-ink);
+    background: var(--tile-wash);
+}
+
+.ib-tile-produits { --tile-ink: #245a43; --tile-wash: #e7f1e9; }
+.ib-tile-categories { --tile-ink: #684b88; --tile-wash: #f1eaf8; }
+.ib-tile-stock { --tile-ink: #285d76; --tile-wash: #e7f1f6; }
+.ib-tile-commandes { --tile-ink: #864d28; --tile-wash: #f8ede3; }
+
+.ib-tile strong {
+    font-size: clamp(16px, 2vw, 20px);
+    font-weight: 650;
+}
+
+.ib-tile-icon.dashicons {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 5px;
+    background: var(--tile-wash);
+    color: var(--tile-ink);
+    font-size: 26px;
+}
+
+@media (max-width: 660px) {
+    .ib-launcher {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
