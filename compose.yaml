@@ -18,7 +18,13 @@ services:
       - ./wordpress/wp-content/themes/infiny-noir-or:/var/www/html/wp-content/themes/infiny-noir-or
       - ./wordpress/wp-content/plugins:/var/www/html/wp-content/plugins
       - ./boutique-admin:/var/www/html/wp-content/mu-plugins/boutique-admin:ro
-      - ./boutique-admin/loader.php:/var/www/html/wp-content/mu-plugins/infiny-boutique.php:ro
+      - &boutique-loader
+        type: bind
+        source: ./boutique-admin/loader.php
+        target: /var/www/html/wp-content/mu-plugins/infiny-boutique-loader.php
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       mariadb:
         condition: service_healthy
@@ -42,7 +48,7 @@ services:
       - ./wordpress-1/wp-content:/var/www/html/wp-content
       - ./wordpress-1/wordpress-1/wp-content/plugins:/var/www/html/wp-content/plugins
       - ./boutique-admin:/var/www/html/wp-content/mu-plugins/boutique-admin:ro
-      - ./boutique-admin/loader.php:/var/www/html/wp-content/mu-plugins/infiny-boutique.php:ro
+      - *boutique-loader
     depends_on:
       mariadb-copy:
         condition: service_healthy
@@ -59,7 +65,7 @@ services:
       - ./wordpress-1/wp-content:/var/www/html/wp-content
       - ./wordpress-1/wordpress-1/wp-content/plugins:/var/www/html/wp-content/plugins
       - ./boutique-admin:/var/www/html/wp-content/mu-plugins/boutique-admin:ro
-      - ./boutique-admin/loader.php:/var/www/html/wp-content/mu-plugins/infiny-boutique.php:ro
+      - *boutique-loader
     depends_on:
       mariadb-copy:
         condition: service_healthy
