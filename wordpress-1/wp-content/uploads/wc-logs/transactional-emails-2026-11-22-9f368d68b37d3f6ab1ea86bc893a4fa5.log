@@ -1,0 +1,22 @@
+2026-11-22T19:34:48+00:00 NOTICE Email "new_order" for order #24 not sent: email type is disabled CONTEXT: {"email_type":"new_order","status":"disabled","recipient":"infiny_admin","order":24}
+2026-11-22T19:34:48+00:00 NOTICE Email "customer_processing_order" for order #24 not sent: email type is disabled CONTEXT: {"email_type":"customer_processing_order","status":"disabled","recipient":"guest","order":24}
+2026-11-22T19:34:48+00:00 NOTICE Email "customer_completed_order" for order #26 not sent: email type is disabled CONTEXT: {"email_type":"customer_completed_order","status":"disabled","recipient":"guest","order":26}
+2026-11-22T19:34:48+00:00 NOTICE Email "new_order" for order #26 not sent: email type is disabled CONTEXT: {"email_type":"new_order","status":"disabled","recipient":"infiny_admin","order":26}
+2026-11-22T19:34:49+00:00 NOTICE Email "new_order" for order #27 not sent: email type is disabled CONTEXT: {"email_type":"new_order","status":"disabled","recipient":"infiny_admin","order":27}
+2026-11-22T19:34:49+00:00 NOTICE Email "customer_on_hold_order" for order #27 not sent: email type is disabled CONTEXT: {"email_type":"customer_on_hold_order","status":"disabled","recipient":"guest","order":27}
+2026-11-22T19:34:49+00:00 NOTICE Email "customer_completed_order" for order #28 not sent: email type is disabled CONTEXT: {"email_type":"customer_completed_order","status":"disabled","recipient":"guest","order":28}
+2026-11-22T19:34:49+00:00 NOTICE Email "new_order" for order #28 not sent: email type is disabled CONTEXT: {"email_type":"new_order","status":"disabled","recipient":"infiny_admin","order":28}
+2026-11-22T19:39:24+00:00 WARNING Email "new_order" for order #25 failed to send: Impossible d‘instancier la fonction mail. CONTEXT: {"email_type":"new_order","status":"failed","recipient":"infiny_admin","order":25}
+2026-11-22T19:39:24+00:00 NOTICE Email "customer_on_hold_order" for order #25 not sent: no_recipient CONTEXT: {"email_type":"customer_on_hold_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":25}
+2026-11-22T20:24:32+00:00 NOTICE Email "customer_completed_order" for order #32 not sent: no_recipient CONTEXT: {"email_type":"customer_completed_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":32}
+2026-11-22T20:24:33+00:00 INFO Email "new_order" for order #32 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":32}
+2026-11-22T20:24:33+00:00 NOTICE Email "customer_completed_order" for order #33 not sent: no_recipient CONTEXT: {"email_type":"customer_completed_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":33}
+2026-11-22T20:24:33+00:00 INFO Email "new_order" for order #33 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":33}
+2026-11-22T20:24:33+00:00 NOTICE Email "customer_completed_order" for order #34 not sent: no_recipient CONTEXT: {"email_type":"customer_completed_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":34}
+2026-11-22T20:24:33+00:00 INFO Email "new_order" for order #34 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":34}
+2026-11-22T20:24:34+00:00 NOTICE Email "customer_completed_order" for order #35 not sent: no_recipient CONTEXT: {"email_type":"customer_completed_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":35}
+2026-11-22T20:24:34+00:00 INFO Email "new_order" for order #35 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":35}
+2026-11-22T20:24:34+00:00 NOTICE Email "customer_completed_order" for order #36 not sent: no_recipient CONTEXT: {"email_type":"customer_completed_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":36}
+2026-11-22T20:24:34+00:00 INFO Email "new_order" for order #36 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":36}
+2026-11-22T20:24:34+00:00 NOTICE Email "customer_completed_order" for order #37 not sent: no_recipient CONTEXT: {"email_type":"customer_completed_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":37}
+2026-11-22T20:24:34+00:00 INFO Email "new_order" for order #37 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":37}

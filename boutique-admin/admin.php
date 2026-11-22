@@ -11,6 +11,8 @@ const TABS = [
     'categories' => 'Catégories',
     'stock' => 'Stock',
     'commandes' => 'Commandes',
+    'depenses' => 'Dépenses',
+    'finances' => 'Suivi financier',
 ];
 
 function can_manage(): bool {
@@ -22,6 +24,10 @@ function url(string $tab = 'accueil', array $args = []): string {
 }
 
 require_once __DIR__ . '/categories.php';
+require_once __DIR__ . '/order-board.php';
+require_once __DIR__ . '/dashboard.php';
+require_once __DIR__ . '/expenses.php';
+require_once __DIR__ . '/finance.php';
 
 add_action('admin_menu', function () {
     if (can_manage()) {
@@ -62,9 +68,7 @@ add_action('template_redirect', function () {
         <meta charset="<?php echo esc_attr(get_bloginfo('charset')); ?>">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Gestion de la boutique</title>
-        <?php if ((TABS[input($_GET, 'vue')] ?? TABS['accueil']) === TABS['accueil']) : ?>
-            <link rel="stylesheet" href="<?php echo esc_url(includes_url('css/dashicons.min.css')); ?>">
-        <?php endif; ?>
+        <link rel="stylesheet" href="<?php echo esc_url(includes_url('css/dashicons.min.css')); ?>">
         <link id="ib-styles" rel="stylesheet" href="<?php echo esc_url($css); ?>">
     </head>
     <body class="ib-page">
@@ -116,15 +120,25 @@ function statuses(): array {
 function render(): void {
     $tab = input($_GET, 'vue');
     $tab = isset(TABS[$tab]) ? $tab : 'accueil';
-    echo '<div class="ib"><header class="ib-header"><h1>Gestion de la boutique</h1><div>';
+    $icons = [
+        'accueil' => 'dashboard',
+        'produits' => 'tag',
+        'categories' => 'category',
+        'stock' => 'archive',
+        'commandes' => 'cart',
+        'depenses' => 'money-alt',
+        'finances' => 'chart-area',
+    ];
+    echo '<div class="ib"><header class="ib-shell"><div class="ib-header"><a class="ib-brand" href="' . esc_url(url()) . '"><span class="dashicons dashicons-store" aria-hidden="true"></span>Gestion de la boutique</a><div>';
     button('Voir le site', home_url('/'));
     button('Se déconnecter', wp_logout_url(url()));
-    echo '</div></header><nav class="ib-nav" aria-label="Navigation de la boutique">';
+    echo '</div></div><nav class="ib-nav" aria-label="Navigation de la boutique">';
     foreach (TABS as $key => $label) {
-        printf('<a href="%s"%s>%s</a>', esc_url(url($key)), $key === $tab ? ' aria-current="page"' : '', esc_html($label));
+        printf('<a href="%s"%s><span class="dashicons dashicons-%s" aria-hidden="true"></span>%s</a>',
+            esc_url(url($key)), $key === $tab ? ' aria-current="page"' : '', esc_attr($icons[$key]), esc_html($label));
     }
     $new_order = $tab === 'commandes' && input($_GET, 'nouveau') === '1';
-    echo '</nav><main><h2>' . esc_html($new_order ? 'Nouvelle commande' : TABS[$tab]) . '</h2>';
+    echo '</nav></header><main><h1>' . esc_html($new_order ? 'Nouvelle commande' : TABS[$tab]) . '</h1>';
 
     if (!class_exists('WooCommerce')) {
         echo '<div class="notice notice-warning inline"><p>Activez WooCommerce pour gérer votre boutique.</p></div>';
@@ -154,6 +168,12 @@ function render(): void {
             case 'categories':
                 categories($id);
                 break;
+            case 'depenses':
+                expenses($id);
+                break;
+            case 'finances':
+                finance();
+                break;
             case 'commandes':
                 if ($new_order) {
                     new_order_form();
@@ -170,58 +190,10 @@ function render(): void {
     echo '</main></div>';
 }
 
-function dashboard(): void {
-    $sections = [
-        'produits' => 'tag',
-        'categories' => 'category',
-        'stock' => 'archive',
-        'commandes' => 'cart',
-    ];
-    echo '<nav class="ib-launcher" aria-label="Rubriques de la boutique">';
-    foreach ($sections as $tab => $icon) {
-        if ($tab === 'categories' && !current_user_can('manage_product_terms')) {
-            continue;
-        }
-        printf(
-            '<a href="%s" class="ib-tile ib-tile-%s"><span class="ib-tile-icon dashicons dashicons-%s" aria-hidden="true"></span><strong>%s</strong></a>',
-            esc_url(url($tab)),
-            esc_attr($tab),
-            esc_attr($icon),
-            esc_html(TABS[$tab])
-        );
-    }
-    echo '</nav>';
-
-    $out = wc_get_products(['stock_status' => 'outofstock', 'status' => 'publish', 'limit' => 1, 'paginate' => true]);
-    $today = current_datetime()->format('Y-m-d');
-    $today_orders = wc_get_orders([
-        'date_created' => $today,
-        'limit' => 1,
-        'paginate' => true,
-    ]);
-    $cards = [
-        ['Commandes du jour', $today_orders->total, url('commandes', ['jour' => $today])],
-        ['Commandes en cours', wc_orders_count('processing'), url('commandes', ['statut' => 'wc-processing'])],
-        ['Produits en rupture', $out->total, url('stock', ['rupture' => 1])],
-    ];
-    echo '<div class="ib-cards">';
-    foreach ($cards as [$label, $total, $href]) {
-        printf('<a href="%s"><span>%s</span><strong>%s</strong></a>', esc_url($href), esc_html($label), esc_html(number_format_i18n($total)));
-    }
-    echo '</div><div class="ib-toolbar">';
-    if (current_user_can('publish_shop_orders')) {
-        button('Nouvelle commande', url('commandes', ['nouveau' => 1]), true);
-    }
-    if (current_user_can('publish_products')) {
-        button('Ajouter un produit', url('produits', ['nouveau' => 1]));
-    }
-    echo '</div><h3>Dernières commandes</h3>';
-    order_table(wc_get_orders(['limit' => 5, 'orderby' => 'date', 'order' => 'DESC']));
-}
-
 function products(string $tab): void {
     $search = input($_GET, 'recherche');
     $rupture = $tab === 'stock' && input($_GET, 'rupture') === '1';
+    $low = $tab === 'stock' && !$rupture && input($_GET, 'faible') === '1';
     $args = [
         'status' => ['publish', 'private', 'draft', 'pending', 'future'],
         'limit' => 20,
@@ -238,17 +210,29 @@ function products(string $tab): void {
             $args['s'] = $search;
         }
     }
-    if ($rupture) {
+    if ($rupture || $low) {
         $args['status'] = 'publish';
+    }
+    if ($rupture) {
         $args['stock_status'] = 'outofstock';
     }
-    $result = wc_get_products($args);
+    if ($low) {
+        $ids = [];
+        foreach (product_batches(array_diff_key($args, array_flip(['limit', 'page', 'paginate']))) as $product) {
+            if (is_low_stock($product)) {
+                $ids[] = $product->get_id();
+            }
+        }
+        $args['include'] = $ids;
+    }
+    $result = $low && !$ids ? (object) ['products' => [], 'max_num_pages' => 0] : wc_get_products($args);
     ?>
     <div class="ib-toolbar">
         <form method="get" action="<?php echo esc_url(home_url('/')); ?>">
             <input type="hidden" name="boutique" value="1">
             <input type="hidden" name="vue" value="<?php echo esc_attr($tab); ?>">
             <?php if ($rupture) : ?><input type="hidden" name="rupture" value="1"><?php endif; ?>
+            <?php if ($low) : ?><input type="hidden" name="faible" value="1"><?php endif; ?>
             <label for="ib-search">Nom ou référence exacte</label>
             <input type="search" name="recherche" id="ib-search" value="<?php echo esc_attr($search); ?>">
             <button class="button">Rechercher</button>
@@ -258,7 +242,15 @@ function products(string $tab): void {
             button('Ajouter un produit', url($tab, ['nouveau' => 1]), true);
         }
         if ($tab === 'stock') {
-            button($rupture ? 'Voir tout le stock' : 'Voir les ruptures', url('stock', $rupture ? [] : ['rupture' => 1]));
+            if ($rupture || $low) {
+                button('Voir tout le stock', url('stock'));
+            }
+            if (!$rupture) {
+                button('Voir les ruptures', url('stock', ['rupture' => 1]));
+            }
+            if (!$low) {
+                button('Voir le stock faible', url('stock', ['faible' => 1]));
+            }
         }
         ?>
     </div>
@@ -267,25 +259,72 @@ function products(string $tab): void {
         echo '<p class="ib-empty">Aucun produit trouvé.</p>';
         return;
     }
+    if ($tab === 'produits') {
+        product_grid($result->products);
+    } else {
+        stock_table($result->products);
+    }
+    pagination($tab, (int) $result->max_num_pages, ['recherche' => $search, 'rupture' => (int) $rupture, 'faible' => (int) $low]);
+}
+
+function purchase_price(\WC_Product $product) {
+    return $product->meta_exists('_infiny_purchase_price')
+        ? $product->get_meta('_infiny_purchase_price')
+        : $product->get_cogs_value();
+}
+
+function stock_label(\WC_Product $product): string {
+    return (string) ($product->get_stock_quantity() ?? ($product->is_in_stock() ? 'Non suivi' : 'Rupture'));
+}
+
+function product_grid(array $products): void {
+    echo '<div class="ib-product-grid" aria-label="Produits">';
+    foreach ($products as $product) {
+        $id = $product->get_id();
+        $editable = current_user_can('edit_product', $id);
+        $name = $product->get_name();
+        $image = $product->get_image_id() ? wp_get_attachment_image($product->get_image_id(), 'medium', false, ['alt' => '']) : '';
+        if ($editable) {
+            printf('<a class="ib-product-card" href="%s">', esc_url(url('produits', ['id' => $id])));
+        } else {
+            echo '<article class="ib-product-card">';
+        }
+        ?>
+        <div class="ib-product-photo"><?php echo $image ?: '<span>Sans photo</span>'; ?></div>
+        <div class="ib-product-info">
+            <h3 title="<?php echo esc_attr($name); ?>"><?php echo esc_html($name); ?></h3>
+            <dl class="ib-product-prices">
+                <div><dt>Prix d’achat</dt><dd><?php echo money(purchase_price($product)); ?></dd></div>
+                <div><dt>Prix de vente</dt><dd><?php echo money($product->get_price()); ?></dd></div>
+            </dl>
+            <div class="ib-product-stock">
+                <span>Stock</span>
+                <strong class="ib-pill<?php echo $product->is_in_stock() ? '' : ' ib-alert'; ?>"><?php echo esc_html(stock_label($product)); ?></strong>
+            </div>
+        </div>
+        <?php
+        echo $editable ? '</a>' : '</article>';
+    }
+    echo '</div>';
+}
+
+function stock_table(array $products): void {
     echo '<div class="ib-table"><table><thead><tr><th>Produit</th><th>Référence</th><th>Prix de vente</th><th>Stock</th><th>Action</th></tr></thead><tbody>';
-    foreach ($result->products as $product) {
-        $quantity = $product->get_stock_quantity();
-        $stock = $quantity ?? ($product->is_in_stock() ? 'Non suivi' : 'Rupture');
-        $href = url($tab, ['id' => $product->get_id()]);
+    foreach ($products as $product) {
+        $href = url('stock', ['id' => $product->get_id()]);
         echo '<tr><td><div class="ib-product">';
         if ($product->get_image_id()) {
             echo wp_get_attachment_image($product->get_image_id(), [48, 48], false, ['alt' => '']);
         }
         echo '<strong>' . esc_html($product->get_name()) . '</strong></div></td>';
         echo '<td>' . esc_html($product->get_sku() ?: '—') . '</td><td>' . money($product->get_price()) . '</td>';
-        printf('<td><span class="ib-pill%s">%s</span></td><td>', !$product->is_in_stock() ? ' ib-alert' : '', esc_html((string) $stock));
+        printf('<td><span class="ib-pill%s">%s</span></td><td>', !$product->is_in_stock() ? ' ib-alert' : '', esc_html(stock_label($product)));
         if (current_user_can('edit_product', $product->get_id())) {
-            button($tab === 'stock' ? 'Ajuster' : 'Modifier', $href);
+            button('Ajuster', $href);
         }
         echo '</td></tr>';
     }
     echo '</tbody></table></div>';
-    pagination($tab, (int) $result->max_num_pages, ['recherche' => $search, 'rupture' => (int) $rupture]);
 }
 
 function product_form(string $tab, int $id): void {
@@ -314,7 +353,7 @@ function product_form(string $tab, int $id): void {
                 <label>Nom <input name="nom" required value="<?php echo esc_attr($product->get_name('edit')); ?>"></label>
                 <label>Référence <input name="reference" value="<?php echo esc_attr($product->get_sku('edit')); ?>"></label>
                 <label>Prix d’achat (<?php echo esc_html(get_woocommerce_currency()); ?>)
-                    <input name="achat" inputmode="decimal" value="<?php echo esc_attr($product->meta_exists('_infiny_purchase_price') ? $product->get_meta('_infiny_purchase_price') : ($product->get_cogs_value() ?? '')); ?>">
+                    <input name="achat" inputmode="decimal" value="<?php echo esc_attr(purchase_price($product) ?? ''); ?>">
                 </label>
                 <label>Prix de vente (<?php echo esc_html(get_woocommerce_currency()); ?>)
                     <input name="vente" inputmode="decimal" required value="<?php echo esc_attr($product->get_regular_price('edit')); ?>">
@@ -470,6 +509,10 @@ function save_photos(\WC_Product $product): bool {
 }
 
 function orders(): void {
+    if (input($_GET, 'affichage') === 'statuts') {
+        order_board();
+        return;
+    }
     $status = input($_GET, 'statut');
     $labels = statuses();
     $status = isset($labels[$status]) ? $status : '';
@@ -497,6 +540,7 @@ function orders(): void {
             <input type="date" name="jour" id="ib-day" value="<?php echo esc_attr($day); ?>">
             <button class="button">Filtrer</button>
         </form>
+        <?php button('Voir par statut', order_board_url()); ?>
         <?php if (current_user_can('publish_shop_orders')) {
             button('Nouvelle commande', url('commandes', ['nouveau' => 1]), true);
         } ?>
@@ -599,16 +643,32 @@ add_action('admin_post_infiny_boutique_order', function () {
     if (!class_exists('WooCommerce') || !can_manage() || !current_user_can('edit_shop_order', $id)) {
         wp_die('Accès indisponible.', '', ['response' => 403]);
     }
-    $destination = url('commandes', ['id' => $id]);
+    $board = input($_POST, 'affichage') === 'statuts';
+    $json = $board && input($_POST, 'format') === 'json';
+    $destination = $board ? order_board_url() : url('commandes', ['id' => $id]);
     $order = wc_get_order($id);
     $status = input($_POST, 'statut');
+    $complete = static function (string $error = '', int $code = 422) use ($destination, $json) {
+        if ($json) {
+            if ($error !== '') {
+                wp_send_json_error(['message' => $error], $code);
+            }
+            wp_send_json_success();
+        }
+        finish($destination, $error);
+    };
     if (!$order instanceof \WC_Order || $order->has_status('refunded')) {
-        finish($destination, 'Le statut de cette commande ne peut pas être modifié ici.');
+        $complete('Le statut de cette commande ne peut pas être modifié ici.');
+    }
+    $current = 'wc-' . $order->get_status();
+    $editable = editable_statuses();
+    if ($board && (!isset($editable[$current]) || input($_POST, 'statut_initial') !== $current)) {
+        $complete('Le statut a changé. Rechargez le tableau avant de réessayer.', 409);
     }
     if (!$order->has_status(substr($status, 3))) {
-        if (!isset(editable_statuses()[$status]) || !$order->update_status(substr($status, 3), '', true)) {
-            finish($destination, 'Le statut n’a pas pu être enregistré.');
+        if (!isset($editable[$status]) || !$order->update_status(substr($status, 3), '', true)) {
+            $complete('Le statut n’a pas pu être enregistré.');
         }
     }
-    finish($destination);
+    $complete();
 });
