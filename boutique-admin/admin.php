@@ -31,6 +31,7 @@ require_once __DIR__ . '/expenses.php';
 require_once __DIR__ . '/finance.php';
 require_once __DIR__ . '/restock.php';
 require_once __DIR__ . '/clients.php';
+require_once __DIR__ . '/order-qr.php';
 
 add_action('admin_menu', function () {
     if (can_manage()) {
@@ -547,6 +548,7 @@ function orders(): void {
         return;
     }
     $status = input($_GET, 'statut');
+    $reference = strtoupper(input($_GET, 'reference'));
     $labels = statuses();
     $status = isset($labels[$status]) ? $status : '';
     $day = input($_GET, 'jour');
@@ -557,12 +559,23 @@ function orders(): void {
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/D', $day)) {
         $args['date_created'] = $day;
     }
-    $result = wc_get_orders($args);
+    if ($reference !== '') {
+        $match = order_by_sms_reference($reference);
+        if ($match && (($status && !$match->has_status(substr($status, 3))) ||
+            (isset($args['date_created']) && (!$match->get_date_created() || wc_format_datetime($match->get_date_created(), 'Y-m-d') !== $day)))) {
+            $match = null;
+        }
+        $result = (object) ['orders' => $match ? [$match] : [], 'max_num_pages' => 1];
+    } else {
+        $result = wc_get_orders($args);
+    }
     ?>
     <div class="ib-toolbar">
         <form method="get" action="<?php echo esc_url(home_url('/')); ?>">
             <input type="hidden" name="boutique" value="1">
             <input type="hidden" name="vue" value="commandes">
+            <label for="ib-order-reference">Référence SMS</label>
+            <input id="ib-order-reference" type="search" name="reference" value="<?php echo esc_attr($reference); ?>">
             <label for="ib-status">Statut</label>
             <select name="statut" id="ib-status"><option value="">Tous les statuts</option>
                 <?php foreach ($labels as $code => $label) : ?>
@@ -621,6 +634,10 @@ function order_table(array $orders): void {
         $date = $order->get_date_created();
         echo '<tr><td>';
         button('#' . $order->get_order_number(), url('commandes', ['id' => $order->get_id()]));
+        $reference = $order->get_meta(ORDER_SMS_REFERENCE);
+        if ($reference) {
+            printf('<small class="ib-order-reference">%s</small>', esc_html($reference));
+        }
         echo '</td><td>' . esc_html($date ? wc_format_datetime($date, 'd/m/Y H:i') : '—') . '</td>';
         echo '<td>' . esc_html(order_client_name($order) ?: '—') . '</td>';
         echo '<td>' . money($order->get_total(), ['currency' => $order->get_currency()]) . '</td>';
@@ -655,6 +672,7 @@ function order_detail(int $id): void {
             <?php endforeach; ?>
         </tbody></table></div>
         <p>Total de la commande <strong><?php echo money($order->get_total(), ['currency' => $order->get_currency()]); ?></strong></p>
+        <?php render_order_sms($order); ?>
         <?php if (current_user_can('edit_shop_order', $id) && $status !== 'wc-refunded') : ?>
             <form class="ib-toolbar" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" method="post">
                 <input type="hidden" name="action" value="infiny_boutique_order">

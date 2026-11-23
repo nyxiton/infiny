@@ -981,3 +981,28 @@ a.ib-product-card:hover {
 @media (max-width: 620px) {
     .ib-finance .ib-chart-column:not(:nth-child(3n + 1)):not(:last-child) > span { visibility: hidden; }
 }
+
+.ib-order-reference {
+    display: block;
+    padding-inline: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.ib-order-sms {
+    margin-block: 16px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--accent-wash);
+}
+
+.ib-order-sms h4 {
+    margin: 0 0 8px;
+}
+
+.ib-order-qr {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    background: #fff;
+}
