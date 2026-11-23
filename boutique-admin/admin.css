@@ -1000,6 +1000,36 @@ a.ib-product-card:hover {
     margin: 0 0 8px;
 }
 
+.ib-order-qr-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+    gap: 12px;
+}
+
+.ib-order-qr-card {
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: #fff;
+}
+
+.ib-order-qr-card h5 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.ib-order-qr-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.ib-order-qr-actions [hidden] {
+    display: none;
+}
+
 .ib-order-qr {
     display: block;
     max-width: 100%;

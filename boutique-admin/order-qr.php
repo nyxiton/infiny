@@ -8,6 +8,8 @@ const SMS_NUMBER_OPTION = 'infiny_boutique_sms_number';
 const SMS_SETTINGS_PAGE = 'infiny-boutique-sms';
 const ORDER_SMS_REFERENCE = '_infiny_sms_reference';
 const ORDER_SMS_QR = '_infiny_sms_qr';
+const ORDER_CLIENT_CODE = '_infiny_sms_client_code';
+const ORDER_CLIENT_QR = '_infiny_sms_client_qr';
 
 function sms_settings_url(): string {
     return admin_url('admin.php?page=' . SMS_SETTINGS_PAGE);
@@ -54,7 +56,7 @@ function sms_settings(): void {
     <div class="wrap">
         <h1>SMS de la boutique</h1>
         <?php settings_errors(); ?>
-        <p>Le QR code de chaque commande prépare un SMS avec sa référence et ce numéro comme destinataire.</p>
+        <p>Les QR codes colis et client préparent un SMS à destination de ce numéro.</p>
         <form method="post" action="options.php">
             <?php settings_fields(SMS_SETTINGS_PAGE); ?>
             <label for="ib-sms-number">Numéro de la boutique</label>
@@ -72,7 +74,6 @@ function order_sms_data(\WC_Order $order): array {
         return [];
     }
     $reference = (string) $order->get_meta(ORDER_SMS_REFERENCE);
-    $stored = $order->get_meta(ORDER_SMS_QR);
     $number = normalize_sms_number((string) get_option(SMS_NUMBER_OPTION, ''));
     $changed = false;
     $serial = strtoupper(base_convert((string) $id, 10, 36));
@@ -83,31 +84,56 @@ function order_sms_data(\WC_Order $order): array {
         $changed = true;
     }
 
-    $data = ['reference' => $reference, 'number' => '', 'png' => ''];
+    $client_code = (string) $order->get_meta(ORDER_CLIENT_CODE);
+    if ($client_code === '') {
+        $suffix = strtoupper(substr(hash_hmac('sha256', 'infiny-client-' . $id, wp_salt('auth')), 0, 12));
+        $client_code = "CL-$serial-$suffix";
+        $order->update_meta_data(ORDER_CLIENT_CODE, $client_code);
+        $changed = true;
+    }
+
+    $client_message = "$reference $client_code";
+    $parcel_png = '';
+    $client_png = '';
     if ($number) {
-        // SMSTO is the SMS format understood by QR-code readers such as ZXing.
-        $payload = 'SMSTO:' . $number . ':' . $reference;
-        $png = is_array($stored) && ($stored['payload'] ?? '') === $payload ? ($stored['png'] ?? '') : '';
-        if ($png === '') {
-            try {
-                $png = order_qr_png($payload);
-            } catch (\Throwable $error) {
-                wc_get_logger()->error('Le QR code de commande n’a pas pu être généré.', [
-                    'source' => 'infiny-boutique',
-                    'order_id' => $id,
-                ]);
-            }
-            if ($png !== '') {
-                $order->update_meta_data(ORDER_SMS_QR, ['payload' => $payload, 'png' => $png]);
-                $changed = true;
-            }
-        }
-        $data = ['reference' => $reference, 'number' => $number, 'png' => $png];
+        $parcel_png = stored_order_qr($order, ORDER_SMS_QR, $number, $reference, $changed);
+        $client_png = stored_order_qr($order, ORDER_CLIENT_QR, $number, $client_message, $changed);
     }
     if ($changed) {
         $order->save_meta_data();
     }
-    return $data;
+    return [
+        'reference' => $reference,
+        'number' => $number,
+        'parcel_png' => $parcel_png,
+        'client_png' => $client_png,
+        'client_code' => $client_code,
+        'client_message' => $client_message,
+    ];
+}
+
+function stored_order_qr(\WC_Order $order, string $key, string $number, string $message, bool &$changed): string {
+    // SMSTO is the SMS format understood by QR readers such as ZXing.
+    $payload = "SMSTO:$number:$message";
+    $stored = $order->get_meta($key);
+    if (is_array($stored) && ($stored['payload'] ?? '') === $payload && !empty($stored['png'])) {
+        return $stored['png'];
+    }
+
+    try {
+        $png = order_qr_png($payload);
+    } catch (\Throwable $error) {
+        wc_get_logger()->error('Le QR code de commande n’a pas pu être généré.', [
+            'source' => 'infiny-boutique',
+            'order_id' => $order->get_id(),
+        ]);
+        return '';
+    }
+    if ($png !== '') {
+        $order->update_meta_data($key, ['payload' => $payload, 'png' => $png]);
+        $changed = true;
+    }
+    return $png;
 }
 
 function order_qr_png(string $payload): string {
@@ -131,6 +157,12 @@ add_action('woocommerce_new_order', function ($id, $order) {
     }
 }, 10, 2);
 
+add_action('woocommerce_order_status_changed', function ($id, $previous, $next, $order) {
+    if ($order instanceof \WC_Order && in_array($previous, ['auto-draft', 'draft', 'checkout-draft'], true)) {
+        order_sms_data($order);
+    }
+}, 10, 4);
+
 function order_by_sms_reference(string $reference): ?\WC_Order {
     if (!preg_match('/^INF-([0-9A-Z]{1,13})-[0-9A-F]{8}$/D', $reference, $matches)) {
         return null;
@@ -147,23 +179,45 @@ function render_order_sms(\WC_Order $order): void {
     }
 
     $reference = $data['reference'];
-    $number = $data['number'];
     ?>
     <section class="ib-order-sms">
         <h4>Référence SMS <code><?php echo esc_html($reference); ?></code></h4>
-        <?php if ($data['png']) :
-            $image = 'data:image/png;base64,' . $data['png'];
+        <p>Code personnel client <code><?php echo esc_html($data['client_code']); ?></code></p>
+        <?php if ($data['number']) : ?>
+            <div class="ib-order-qr-grid">
+                <?php render_sms_qr('QR colis', 'À imprimer et à coller sur le colis. Le point relais envoie la référence par SMS pour signaler la réception.', $data['number'], $reference, $data['parcel_png'], $reference . '-colis.png'); ?>
+                <?php render_sms_qr('QR client', 'À transmettre au client. Le SMS contient la référence de la commande et son code personnel.', $data['number'], $data['client_message'], $data['client_png'], $reference . '-client.png', true); ?>
+            </div>
+        <?php elseif (can_manage()) : ?>
+            <p><a href="<?php echo esc_url(sms_settings_url()); ?>">Configurer le numéro de la boutique</a> pour générer les QR codes.</p>
+        <?php endif; ?>
+    </section>
+    <?php
+}
+
+function render_sms_qr(string $title, string $description, string $number, string $message, string $png, string $filename, bool $share = false): void {
+    ?>
+    <div class="ib-order-qr-card">
+        <h5><?php echo esc_html($title); ?></h5>
+        <p><?php echo esc_html($description); ?></p>
+        <?php if ($png !== '') :
+            $image = 'data:image/png;base64,' . $png;
             ?>
-            <img class="ib-order-qr" width="180" height="180" src="<?php echo esc_attr($image); ?>" alt="QR code SMS de la commande">
-            <p>Scannez le QR code pour préparer le SMS, puis confirmez son envoi sur le téléphone.</p>
-            <p><a href="<?php echo esc_url('sms:' . $number . '?body=' . rawurlencode($reference), ['sms']); ?>">Ouvrir le SMS</a> ·
-                <a href="<?php echo esc_attr($image); ?>" download="<?php echo esc_attr($reference . '.png'); ?>">Télécharger le QR code</a></p>
-        <?php elseif (!$number && can_manage()) : ?>
-            <p><a href="<?php echo esc_url(sms_settings_url()); ?>">Configurer le numéro de la boutique</a> pour générer le QR code.</p>
+            <img class="ib-order-qr" width="180" height="180" src="<?php echo esc_attr($image); ?>" alt="<?php echo esc_attr($title); ?>">
+            <div class="ib-order-qr-actions">
+                <a href="<?php echo esc_attr($image); ?>" download="<?php echo esc_attr($filename); ?>">Télécharger</a>
+                <a href="<?php echo esc_url('sms:' . $number . '?body=' . rawurlencode($message), ['sms']); ?>">Ouvrir le SMS</a>
+                <?php if ($share) : ?>
+                    <button type="button" class="button" data-ib-share-qr hidden>Partager au client</button>
+                <?php endif; ?>
+            </div>
+            <?php if ($share) : ?>
+                <p data-ib-share-status role="status" hidden></p>
+            <?php endif; ?>
         <?php else : ?>
             <p>Le QR code est indisponible.</p>
         <?php endif; ?>
-    </section>
+    </div>
     <?php
 }
 

@@ -46,3 +46,29 @@
         table.classList.add('ib-table-stacked');
     }
 })();
+
+(() => {
+    if (!navigator.share || !navigator.canShare) return;
+
+    for (const button of document.querySelectorAll('[data-ib-share-qr]')) {
+        const card = button.closest('.ib-order-qr-card');
+        const download = card.querySelector('a[download]');
+        const status = card.querySelector('[data-ib-share-status]');
+        const bytes = Uint8Array.from(atob(download.getAttribute('href').split(',')[1]), character => character.charCodeAt(0));
+        const file = new File([bytes], download.download, { type: 'image/png' });
+        const share = { files: [file] };
+        if (!navigator.canShare(share)) continue;
+
+        button.hidden = false;
+        button.addEventListener('click', async () => {
+            status.hidden = true;
+            try {
+                await navigator.share(share);
+            } catch (error) {
+                if (error.name === 'AbortError') return;
+                status.textContent = 'Le partage a échoué. Téléchargez le QR code pour l’envoyer au client.';
+                status.hidden = false;
+            }
+        });
+    }
+})();
