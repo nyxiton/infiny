@@ -20,3 +20,143 @@ License: GNU General Public License v2 or later
 .brand-logo-default{object-fit:cover;object-position:center 57%}
 .brand-location{font-size:8px;letter-spacing:.4em;line-height:1.4;margin-top:8px}
 @media(max-width:760px){.brand-logo{width:150px;height:60px}.brand-location{font-size:7px;letter-spacing:.3em;margin-top:6px}.footer-top .brand-logo{width:210px;height:85px}}
+
+@media screen and (max-width: 760px) {
+    .site-header {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        column-gap: 8px;
+        padding-inline: clamp(12px, 4vw, 30px);
+    }
+
+    .site-branding {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .site-header .brand-logo {
+        max-width: 100%;
+        height: clamp(44px, 16vw, 75px);
+    }
+
+    .header-actions {
+        gap: 4px;
+    }
+
+    .header-actions a, .header-actions button, .menu-toggle {
+        display: inline-grid;
+        min-width: 44px;
+        min-height: 44px;
+        place-items: center;
+        padding: 0;
+    }
+
+    .menu-toggle span {
+        margin: 0;
+    }
+
+    .primary-nav.is-open {
+        max-height: min(55dvh, 440px);
+        overflow-y: auto;
+    }
+
+    .nav-links a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 38px;
+    }
+
+    #search-panel form {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+
+    #search-panel label {
+        flex: 1 1 150px;
+        min-width: 0;
+    }
+
+    #search-panel input[type="search"] {
+        width: 100%;
+    }
+
+    input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+        font-size: 16px;
+    }
+
+    .hero h1 {
+        font-size: clamp(36px, 9vw, 58px);
+        overflow-wrap: anywhere;
+    }
+
+    .content-area, .shop-content {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .woocommerce ul.products[class*="columns-"] {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px 10px;
+    }
+
+    .woocommerce ul.products[class*="columns-"]::before,
+    .woocommerce ul.products[class*="columns-"]::after {
+        content: none;
+    }
+
+    .woocommerce ul.products[class*="columns-"] li.product {
+        float: none !important;
+        width: auto !important;
+        min-width: 0;
+        margin: 0 !important;
+    }
+
+    .woocommerce ul.products[class*="columns-"] li.product .button {
+        max-width: 100%;
+        white-space: normal;
+    }
+
+    .woocommerce .col2-set .col-1, .woocommerce .col2-set .col-2,
+    .woocommerce-page .col2-set .col-1, .woocommerce-page .col2-set .col-2,
+    .woocommerce form .form-row-first, .woocommerce form .form-row-last {
+        float: none;
+        width: 100%;
+    }
+
+    .woocommerce div.product form.cart .variations select {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    .woocommerce table.cart td.actions .coupon {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .woocommerce table.cart td.actions .coupon :is(.input-text, .button) {
+        flex: 1 1 120px;
+        width: auto;
+        min-width: 0;
+    }
+
+    .wp-block-table, .woocommerce .woocommerce-product-attributes {
+        max-width: 100%;
+    }
+}
+
+@media screen and (max-width: 380px) {
+    .header-actions a, .header-actions button, .menu-toggle {
+        min-width: 40px;
+    }
+
+    .hero h1 {
+        font-size: clamp(32px, 10vw, 42px);
+    }
+
+    .section, .shop-content {
+        padding-inline: 12px;
+    }
+}

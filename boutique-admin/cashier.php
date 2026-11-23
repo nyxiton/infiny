@@ -147,24 +147,43 @@ function cashier(): void {
     <?php
 }
 
+add_filter('woocommerce_order_data_store_cpt_get_orders_query', function (array $query, array $args): array {
+    if (!empty($args['infiny_cashier_payments'])) {
+        $query['meta_query'][] = ['key' => CASHIER_PAYMENT, 'compare' => 'EXISTS'];
+    }
+    return $query;
+}, 10, 2);
+
+function cashier_recorded_payments(string $currency, int $start, int $end): iterable {
+    $args = ['type' => 'shop_order', 'date_paid' => $start . '...' . $end];
+    if (\Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled()) {
+        $args['meta_query'] = [['key' => CASHIER_PAYMENT, 'compare' => 'EXISTS']];
+    } else {
+        $args['infiny_cashier_payments'] = true;
+    }
+    foreach (dashboard_order_batches($args) as $order) {
+        $payment = $order->get_meta(CASHIER_PAYMENT);
+        if (is_array($payment) && isset(CASHIER_METHODS[$payment['method'] ?? '']) && $order->get_currency() === $currency) {
+            yield [$order, $payment];
+        }
+    }
+}
+
 function cashier_daily_totals(string $currency, int $order_id = 0): void {
     $now = current_datetime();
     $date = input($_GET, 'date_caisse');
     $day = expense_date_is_valid($date) ? new \DateTimeImmutable($date, wp_timezone()) : $now->setTime(0, 0);
-    $range = $day->getTimestamp() . '...' . $day->modify('+1 day')->modify('-1 second')->getTimestamp();
+    $end = $day->modify('+1 day')->modify('-1 second')->getTimestamp();
     $totals = [];
     $entries = [];
-    foreach (dashboard_order_batches(['type' => 'shop_order', 'date_paid' => $range]) as $order) {
-        $payment = $order->get_meta(CASHIER_PAYMENT);
-        if (is_array($payment) && isset(CASHIER_METHODS[$payment['method'] ?? '']) && $order->get_currency() === $currency) {
-            $key = $payment['method'];
-            $totals[$key] = ($totals[$key] ?? 0) + (float) $order->get_total();
-            if (current_user_can('edit_shop_order', $order->get_id())) {
-                $entries[] = $order;
-            }
+    foreach (cashier_recorded_payments($currency, $day->getTimestamp(), $end) as [$order, $payment]) {
+        $key = $payment['method'];
+        $totals[$key] = ($totals[$key] ?? 0) + (float) ($payment['amount'] ?? $order->get_total());
+        if (current_user_can('edit_shop_order', $order->get_id())) {
+            $entries[] = [$order, $payment];
         }
     }
-    usort($entries, static fn ($a, $b) => [$b->get_date_paid()->getTimestamp(), $b->get_id()] <=> [$a->get_date_paid()->getTimestamp(), $a->get_id()]);
+    usort($entries, static fn ($a, $b) => [$b[0]->get_date_paid()->getTimestamp(), $b[0]->get_id()] <=> [$a[0]->get_date_paid()->getTimestamp(), $a[0]->get_id()]);
     ?>
     <section id="ib-cashier-history" class="ib-dashboard-card ib-cashier-daily">
         <h2><?php echo $day->format('Y-m-d') === $now->format('Y-m-d') ? 'Encaissements du jour' : 'Encaissements du ' . esc_html($day->format('d/m/Y')); ?></h2>
@@ -190,15 +209,14 @@ function cashier_daily_totals(string $currency, int $order_id = 0): void {
                     <table>
                         <thead><tr><th>Heure</th><th>Commande</th><th>Paiement</th><th>Montant</th><th>Ticket</th></tr></thead>
                         <tbody>
-                            <?php foreach ($entries as $entry) :
+                            <?php foreach ($entries as [$entry, $payment]) :
                                 $ticket = url('caisse', ['ticket' => $entry->get_id()]);
-                                $payment = $entry->get_meta(CASHIER_PAYMENT);
                                 ?>
                                 <tr>
                                     <td><?php echo esc_html(wc_format_datetime($entry->get_date_paid(), 'H:i')); ?></td>
                                     <td><a href="<?php echo esc_url($ticket); ?>">#<?php echo esc_html($entry->get_order_number()); ?></a></td>
                                     <td><?php echo esc_html(CASHIER_METHODS[$payment['method']]); ?></td>
-                                    <td><?php echo money($entry->get_total(), ['currency' => $currency]); ?></td>
+                                    <td><?php echo money($payment['amount'] ?? $entry->get_total(), ['currency' => $currency]); ?></td>
                                     <td><?php button('Voir le ticket', $ticket); ?></td>
                                 </tr>
                             <?php endforeach; ?>

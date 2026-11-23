@@ -38,6 +38,7 @@ require_once __DIR__ . '/dashboard.php';
 require_once __DIR__ . '/expenses.php';
 require_once __DIR__ . '/finance.php';
 require_once __DIR__ . '/restock.php';
+require_once __DIR__ . '/stock-insights.php';
 require_once __DIR__ . '/clients.php';
 require_once __DIR__ . '/order-qr.php';
 require_once __DIR__ . '/order-delivery.php';
@@ -77,6 +78,7 @@ add_action('template_redirect', function () {
 
     status_header(200);
     $css = add_query_arg('ver', filemtime(__DIR__ . '/admin.css'), content_url('mu-plugins/boutique-admin/admin.css'));
+    $layout = add_query_arg('ver', filemtime(__DIR__ . '/layout.js'), content_url('mu-plugins/boutique-admin/layout.js'));
     ?>
     <!doctype html>
     <html lang="fr">
@@ -86,6 +88,7 @@ add_action('template_redirect', function () {
         <title>Gestion de la boutique</title>
         <link rel="stylesheet" href="<?php echo esc_url(includes_url('css/dashicons.min.css')); ?>">
         <link id="ib-styles" rel="stylesheet" href="<?php echo esc_url($css); ?>">
+        <script defer src="<?php echo esc_url($layout); ?>"></script>
     </head>
     <body class="ib-page">
         <?php render(); ?>
@@ -150,7 +153,8 @@ function render(): void {
     echo '<div class="ib"><header class="ib-shell"><div class="ib-header"><a class="ib-brand" href="' . esc_url(url()) . '"><span class="dashicons dashicons-store" aria-hidden="true"></span>Gestion de la boutique</a><div>';
     button('Voir le site', home_url('/'));
     button('Se déconnecter', wp_logout_url(url()));
-    echo '</div></div><nav class="ib-nav" aria-label="Navigation de la boutique">';
+    echo '<button type="button" class="button ib-menu-toggle" aria-expanded="false" aria-controls="ib-main-nav"><span class="dashicons dashicons-menu" aria-hidden="true"></span>Menu</button>';
+    echo '</div></div><nav id="ib-main-nav" class="ib-nav" aria-label="Navigation de la boutique">';
     foreach (TABS as $key => $label) {
         printf('<a href="%s"%s><span class="dashicons dashicons-%s" aria-hidden="true"></span>%s</a>',
             esc_url(url($key)), $key === $tab ? ' aria-current="page"' : '', esc_attr($icons[$key]), esc_html($label));
@@ -284,6 +288,9 @@ function products(string $tab): void {
         ?>
     </div>
     <?php
+    if ($tab === 'stock' && $search === '' && !$rupture && !$low) {
+        stock_insights();
+    }
     if (!$result->products) {
         echo '<p class="ib-empty">Aucun produit trouvé.</p>';
         return;
@@ -568,7 +575,7 @@ function orders(): void {
     $labels = statuses();
     $status = isset($labels[$status]) ? $status : '';
     $day = input($_GET, 'jour');
-    $args = ['limit' => 20, 'paged' => max(1, absint(input($_GET, 'numero'))), 'paginate' => true, 'orderby' => 'date', 'order' => 'DESC'];
+    $args = ['type' => 'shop_order', 'limit' => 20, 'paged' => max(1, absint(input($_GET, 'numero'))), 'paginate' => true, 'orderby' => 'date', 'order' => 'DESC'];
     if ($status !== '') {
         $args['status'] = $status;
     }
@@ -639,13 +646,18 @@ function new_order_form(): void {
     <?php
 }
 
-function order_table(array $orders): void {
+function order_table(array $orders, bool $show_client = true): void {
+    $orders = array_filter($orders, static fn ($order) => $order instanceof \WC_Order);
     if (!$orders) {
         echo '<p class="ib-empty">Aucune commande trouvée.</p>';
         return;
     }
     $labels = statuses();
-    echo '<div class="ib-table"><table><thead><tr><th>Commande</th><th>Date</th><th>Client</th><th>Total</th><th>Statut</th></tr></thead><tbody>';
+    echo '<div class="ib-table"><table><thead><tr><th>Commande</th><th>Date</th>';
+    if ($show_client) {
+        echo '<th>Client</th>';
+    }
+    echo '<th>Total</th><th>Statut</th></tr></thead><tbody>';
     foreach ($orders as $order) {
         $date = $order->get_date_created();
         echo '<tr><td>';
@@ -656,7 +668,9 @@ function order_table(array $orders): void {
         }
         delivery_badge($order);
         echo '</td><td>' . esc_html($date ? wc_format_datetime($date, 'd/m/Y H:i') : '—') . '</td>';
-        echo '<td>' . esc_html(order_client_name($order) ?: '—') . '</td>';
+        if ($show_client) {
+            echo '<td>' . esc_html(order_client_name($order) ?: '—') . '</td>';
+        }
         echo '<td>' . money($order->get_total(), ['currency' => $order->get_currency()]) . '</td>';
         echo '<td><span class="ib-pill">' . esc_html($labels['wc-' . $order->get_status()] ?? $order->get_status()) . '</span></td></tr>';
     }

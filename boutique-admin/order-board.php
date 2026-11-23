@@ -31,6 +31,7 @@ function order_board(): void {
     <div id="ib-order-board" class="ib-board" tabindex="0" aria-label="Commandes par statut">
         <?php foreach ($labels as $status => $label) :
             $result = wc_get_orders([
+                'type' => 'shop_order',
                 'status' => $status,
                 'limit' => $limit,
                 'paginate' => true,

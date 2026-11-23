@@ -1,0 +1,24 @@
+2026-11-23T10:48:27+00:00 INFO Email "new_order" for order #69 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":69}
+2026-11-23T10:48:28+00:00 NOTICE Email "customer_processing_order" for order #69 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":69}
+2026-11-23T10:48:28+00:00 INFO Email "new_order" for order #70 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":70}
+2026-11-23T10:48:28+00:00 NOTICE Email "customer_on_hold_order" for order #70 not sent: no_recipient CONTEXT: {"email_type":"customer_on_hold_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":70}
+2026-11-23T10:48:28+00:00 NOTICE Email "customer_processing_order" for order #70 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":70}
+2026-11-23T10:49:28+00:00 INFO Email "new_order" for order #73 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":73}
+2026-11-23T10:49:28+00:00 NOTICE Email "customer_processing_order" for order #73 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":73}
+2026-11-23T10:49:28+00:00 INFO Email "new_order" for order #74 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":74}
+2026-11-23T10:49:28+00:00 NOTICE Email "customer_on_hold_order" for order #74 not sent: no_recipient CONTEXT: {"email_type":"customer_on_hold_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":74}
+2026-11-23T10:49:28+00:00 NOTICE Email "customer_processing_order" for order #74 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":74}
+2026-11-23T10:54:43+00:00 INFO Email "new_order" for order #76 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":76}
+2026-11-23T10:54:43+00:00 NOTICE Email "customer_processing_order" for order #76 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":76}
+2026-11-23T10:56:45+00:00 INFO Email "new_order" for order #77 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":77}
+2026-11-23T10:56:45+00:00 NOTICE Email "customer_processing_order" for order #77 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":77}
+2026-11-23T10:56:45+00:00 INFO Email "new_order" for order #78 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":78}
+2026-11-23T10:56:45+00:00 NOTICE Email "customer_processing_order" for order #78 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":78}
+2026-11-23T10:56:46+00:00 INFO Email "new_order" for order #79 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":79}
+2026-11-23T10:56:46+00:00 NOTICE Email "customer_processing_order" for order #79 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":79}
+2026-11-23T10:56:46+00:00 INFO Email "new_order" for order #80 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":80}
+2026-11-23T10:56:46+00:00 NOTICE Email "customer_processing_order" for order #80 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":80}
+2026-11-23T11:14:46+00:00 INFO Email "new_order" for order #83 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":83}
+2026-11-23T11:14:46+00:00 NOTICE Email "customer_processing_order" for order #83 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":83}
+2026-11-23T11:14:47+00:00 INFO Email "new_order" for order #84 sent CONTEXT: {"email_type":"new_order","status":"sent","recipient":"infiny_admin","order":84}
+2026-11-23T11:14:47+00:00 NOTICE Email "customer_processing_order" for order #84 not sent: no_recipient CONTEXT: {"email_type":"customer_processing_order","status":"skipped","recipient":"guest","reason":"no_recipient","order":84}

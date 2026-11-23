@@ -15,7 +15,7 @@ function infiny_setup() {
 }
 add_action('after_setup_theme', 'infiny_setup');
 function infiny_assets() {
-    wp_enqueue_style('infiny', get_stylesheet_uri(), array(), '2.0.0');
+    wp_enqueue_style('infiny', get_stylesheet_uri(), array(), (string) filemtime(get_stylesheet_directory() . '/style.css'));
     wp_enqueue_script('infiny', get_template_directory_uri() . '/assets/theme.js', array(), '1.0.0', true);
     $gold = sanitize_hex_color(get_theme_mod('phoenix_gold', '#c7a66a'));
     if ($gold) { wp_add_inline_style('infiny', ':root{--gold:' . $gold . ';}'); }

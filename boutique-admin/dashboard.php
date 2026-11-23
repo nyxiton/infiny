@@ -4,16 +4,22 @@ namespace Infiny\Boutique;
 
 defined('ABSPATH') || exit;
 
+const CASHIER_DASHBOARD_PERIODS = ['jour' => 'Jour', 'semaine' => 'Semaine', 'mois' => 'Mois', 'annee' => 'Année'];
+
 function dashboard(): void {
     $periods = [1 => 'Aujourd’hui', 7 => '7 jours', 30 => '30 jours'];
     $days = absint(input($_GET, 'periode'));
     $days = isset($periods[$days]) ? $days : 7;
+    $cash_period = input($_GET, 'periode_caisse');
+    $cash_period = isset(CASHIER_DASHBOARD_PERIODS[$cash_period]) ? $cash_period : 'jour';
+    $product_sort = input($_GET, 'tri_produits') === 'ventes' ? 'ventes' : 'quantite';
     $now = current_datetime();
     $start = $now->setTime(0, 0)->modify('-' . ($days - 1) . ' days');
     $previous_start = $start->modify("-$days days");
     $previous_end = $now->modify("-$days days");
     $currency = get_woocommerce_currency();
     $current = dashboard_sales($start, $now, $days, $currency);
+    $products = dashboard_top_products($current['products'], $product_sort);
     $previous = dashboard_sales($previous_start, $previous_end, $days, $currency);
     $stock = dashboard_stock();
     $restocks = restock_summary($start, $now);
@@ -27,7 +33,7 @@ function dashboard(): void {
             <div>
                 <nav class="ib-periods" aria-label="Période des ventes">
                     <?php foreach ($periods as $value => $label) : ?>
-                        <a href="<?php echo esc_url(url('accueil', ['periode' => $value])); ?>"
+                        <a href="<?php echo esc_url(url('accueil', ['periode' => $value, 'periode_caisse' => $cash_period, 'tri_produits' => $product_sort])); ?>"
                             <?php if ($days === $value) echo 'aria-current="true"'; ?>><?php echo esc_html($label); ?></a>
                     <?php endforeach; ?>
                 </nav>
@@ -85,12 +91,13 @@ function dashboard(): void {
             </section>
         </div>
         <div class="ib-dashboard-layout">
+            <?php dashboard_cashier($now, $currency, $days, $cash_period, $product_sort); ?>
             <section class="ib-dashboard-card ib-dashboard-recent">
                 <div class="ib-dashboard-section-header">
                     <h3>Dernières commandes</h3>
                     <?php button('Toutes les commandes', url('commandes')); ?>
                 </div>
-                <?php order_table(wc_get_orders(['limit' => 5, 'orderby' => 'date', 'order' => 'DESC'])); ?>
+                <?php order_table(wc_get_orders(['type' => 'shop_order', 'limit' => 5, 'orderby' => 'date', 'order' => 'DESC'])); ?>
             </section>
             <section class="ib-dashboard-card">
                 <h3>À traiter</h3>
@@ -102,23 +109,38 @@ function dashboard(): void {
                     dashboard_task('Produits en stock faible', $stock['low'], url('stock', ['faible' => 1]), 'warning'); ?>
                 </div>
             </section>
-            <section class="ib-dashboard-card">
-                <h3>Produits les plus vendus</h3>
-                <?php if ($current['products']) : ?>
+            <section id="ib-dashboard-products" class="ib-dashboard-card">
+                <div class="ib-dashboard-section-header">
+                    <h3>Produits les plus vendus</h3>
+                    <nav class="ib-periods" aria-label="Tri des meilleures ventes">
+                        <?php foreach (['quantite' => 'Quantité vendue', 'ventes' => 'Nombre de ventes'] as $key => $label) : ?>
+                            <a href="<?php echo esc_url(url('accueil', ['periode' => $days, 'periode_caisse' => $cash_period, 'tri_produits' => $key]) . '#ib-dashboard-products'); ?>"
+                                <?php if ($product_sort === $key) echo 'aria-current="true"'; ?>><?php echo esc_html($label); ?></a>
+                        <?php endforeach; ?>
+                    </nav>
+                </div>
+                <?php if ($products) : ?>
                     <ol class="ib-dashboard-list">
-                        <?php foreach (array_slice($current['products'], 0, 5, true) as $id => $item) : ?>
+                        <?php foreach ($products as $id => $item) : ?>
                             <li>
                                 <?php if ($id && current_user_can('edit_product', $id) && get_post_type($id) === 'product') : ?>
                                     <a href="<?php echo esc_url(url('produits', ['id' => $id])); ?>"><?php echo esc_html($item['name']); ?></a>
                                 <?php else : ?>
                                     <span><?php echo esc_html($item['name']); ?></span>
                                 <?php endif; ?>
-                                <strong><?php echo esc_html(number_format_i18n($item['units'])); ?> u.</strong>
+                                <strong><?php
+                                    echo $product_sort === 'ventes'
+                                        ? esc_html(number_format_i18n($item['sales']) . ($item['sales'] === 1 ? ' vente' : ' ventes'))
+                                        : esc_html(number_format_i18n($item['units']) . ' u.');
+                                ?></strong>
                             </li>
                         <?php endforeach; ?>
                     </ol>
                 <?php else : ?>
                     <p class="ib-dashboard-caption">Aucun article vendu sur cette période.</p>
+                <?php endif; ?>
+                <?php if ($product_sort === 'ventes') : ?>
+                    <p class="ib-dashboard-caption">Une vente correspond à une commande payée contenant le produit, quelle que soit la quantité.</p>
                 <?php endif; ?>
             </section>
             <section class="ib-dashboard-card">
@@ -156,6 +178,57 @@ function dashboard(): void {
             <p class="ib-dashboard-caption">Les indicateurs de ventes sont calculés en <?php echo esc_html($currency); ?>. Les transactions dans les autres devises sont exclues.</p>
         <?php endif; ?>
     </div>
+    <?php
+}
+
+function dashboard_cashier_start(\DateTimeImmutable $now, string $period): \DateTimeImmutable {
+    $today = $now->setTime(0, 0);
+    return match ($period) {
+        'semaine' => $today->modify('-' . ((int) $today->format('N') - 1) . ' days'),
+        'mois' => $today->modify('first day of this month'),
+        'annee' => $today->setDate((int) $today->format('Y'), 1, 1),
+        default => $today,
+    };
+}
+
+function dashboard_cashier(\DateTimeImmutable $now, string $currency, int $sales_days, string $period, string $product_sort): void {
+    $start = dashboard_cashier_start($now, $period);
+    $totals = array_fill_keys(array_keys(CASHIER_METHODS), 0.0);
+    $count = 0;
+    foreach (cashier_recorded_payments($currency, $start->getTimestamp(), $now->getTimestamp()) as [$order, $payment]) {
+        $totals[$payment['method']] += (float) ($payment['amount'] ?? $order->get_total());
+        ++$count;
+    }
+    ?>
+    <section id="ib-dashboard-cashier" class="ib-dashboard-card ib-dashboard-recent">
+        <div class="ib-dashboard-section-header">
+            <h3>Infos caisse</h3>
+            <nav class="ib-periods" aria-label="Période de la caisse">
+                <?php foreach (CASHIER_DASHBOARD_PERIODS as $key => $label) : ?>
+                    <a href="<?php echo esc_url(url('accueil', ['periode' => $sales_days, 'periode_caisse' => $key, 'tri_produits' => $product_sort]) . '#ib-dashboard-cashier'); ?>"
+                        <?php if ($period === $key) echo 'aria-current="true"'; ?>><?php echo esc_html($label); ?></a>
+                <?php endforeach; ?>
+            </nav>
+        </div>
+        <p class="ib-dashboard-dates">
+            <?php echo esc_html($start->format('d/m/Y')); ?>
+            <?php if ($start->format('Y-m-d') !== $now->format('Y-m-d')) : ?> – <?php echo esc_html($now->format('d/m/Y')); ?><?php endif; ?>
+        </p>
+        <div class="ib-dashboard-cash-layout">
+            <div class="ib-dashboard-cash-total">
+                <span>Total encaissé</span>
+                <strong><?php echo money(array_sum($totals), ['currency' => $currency]); ?></strong>
+                <span><?php echo esc_html(number_format_i18n($count) . ($count === 1 ? ' règlement' : ' règlements')); ?></span>
+                <?php button('Historique de caisse', url('caisse') . '#ib-cashier-history'); ?>
+            </div>
+            <dl class="ib-dashboard-list">
+                <?php foreach (CASHIER_METHODS as $key => $label) : ?>
+                    <div><dt><?php echo esc_html($label); ?></dt><dd><?php echo money($totals[$key], ['currency' => $currency]); ?></dd></div>
+                <?php endforeach; ?>
+            </dl>
+        </div>
+        <p class="ib-dashboard-caption">Encaissements enregistrés dans Caisse, avant remboursements.</p>
+    </section>
     <?php
 }
 
@@ -206,7 +279,7 @@ function dashboard_sales(\DateTimeImmutable $start, \DateTimeImmutable $end, int
         $result['gross'] += $total;
         ++$result['orders'];
         dashboard_add_to_series($result['series'], $order->get_date_paid(), $days, $total);
-        dashboard_add_units($result['products'], $order);
+        dashboard_add_product_activity($result['products'], $order);
         $method = $order->get_payment_method();
         $result['payments'][$method] ??= ['label' => $order->get_payment_method_title() ?: ($method ?: 'Non renseigné'), 'total' => 0.0];
         $result['payments'][$method]['total'] += $total;
@@ -220,26 +293,39 @@ function dashboard_sales(\DateTimeImmutable $start, \DateTimeImmutable $end, int
         $amount = (float) $refund->get_amount();
         $result['refunds'] += $amount;
         dashboard_add_to_series($result['series'], $refund->get_date_created(), $days, -$amount);
-        dashboard_add_units($result['products'], $refund);
+        dashboard_add_product_activity($result['products'], $refund);
     }
 
     $result['net'] = $result['gross'] - $result['refunds'];
     $result['average'] = $result['orders'] ? $result['gross'] / $result['orders'] : 0.0;
-    $result['products'] = array_filter($result['products'], static fn ($item) => $item['units'] > 0);
-    uasort($result['products'], static fn ($a, $b) => $b['units'] <=> $a['units']);
     uasort($result['payments'], static fn ($a, $b) => $b['total'] <=> $a['total']);
     return $result;
 }
 
-function dashboard_add_units(array &$products, \WC_Abstract_Order $order): void {
+function dashboard_add_product_activity(array &$products, \WC_Abstract_Order $order): void {
+    $sold = [];
     foreach ($order->get_items() as $item) {
         $id = $item->get_product_id();
         if (!$id) {
             continue;
         }
-        $products[$id] ??= ['name' => $item->get_name(), 'units' => 0];
-        $products[$id]['units'] += (int) $item->get_quantity();
+        $quantity = (int) $item->get_quantity();
+        $products[$id] ??= ['name' => $item->get_name(), 'units' => 0, 'sales' => 0];
+        $products[$id]['units'] += $quantity;
+        if ($order instanceof \WC_Order && $quantity > 0 && !isset($sold[$id])) {
+            ++$products[$id]['sales'];
+            $sold[$id] = true;
+        }
     }
+}
+
+function dashboard_top_products(array $products, string $sort): array {
+    [$main, $secondary] = $sort === 'ventes' ? ['sales', 'units'] : ['units', 'sales'];
+    $products = array_filter($products, static fn ($item) => $item[$main] > 0);
+    uasort($products, static fn ($a, $b) => ($b[$main] <=> $a[$main])
+        ?: ($b[$secondary] <=> $a[$secondary])
+        ?: strnatcasecmp($a['name'], $b['name']));
+    return array_slice($products, 0, 5, true);
 }
 
 function dashboard_add_to_series(array &$series, ?\WC_DateTime $date, int $days, float $amount): void {

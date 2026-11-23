@@ -39,11 +39,15 @@ function clients(int $id): void {
         return;
     }
     $context = input($_GET, 'pour_commande');
+    if ($record && $context === '' && input($_GET, 'modifier') !== '1') {
+        client_profile($record);
+        return;
+    }
     $details = $record ? client_details($id) : [];
     if ($record || $context !== '') {
         button('Retour', $context === 'nouvelle'
             ? url('commandes', ['nouveau' => 1])
-            : ($context ? url('commandes', ['id' => absint($context)]) : url('clients')));
+            : ($context ? url('commandes', ['id' => absint($context)]) : url('clients', ['id' => $id])));
     }
     ?>
     <form class="ib-panel" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
@@ -107,13 +111,56 @@ function client_list(): void {
                         <td><?php echo esc_html($details['last'] ?? ''); ?></td>
                         <td><?php echo esc_html($details['first'] ?? ''); ?></td>
                         <td><?php echo esc_html($details['phone'] ?? ''); ?></td>
-                        <td><?php button('Modifier', url('clients', ['id' => $record->ID])); ?></td>
+                        <td><?php button('Voir la fiche', url('clients', ['id' => $record->ID])); ?></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
         </table></div>
         <?php pagination('clients', (int) $query->max_num_pages, ['recherche' => $search]); ?>
     <?php endif;
+}
+
+add_filter('woocommerce_order_data_store_cpt_get_orders_query', function (array $query, array $args): array {
+    if (!empty($args['infiny_boutique_client'])) {
+        $query['meta_query'][] = ['key' => ORDER_CLIENT, 'value' => (int) $args['infiny_boutique_client']];
+    }
+    return $query;
+}, 10, 2);
+
+function client_orders(int $id, int $page): object {
+    $args = ['type' => 'shop_order', 'limit' => 15, 'paged' => $page, 'paginate' => true, 'orderby' => 'date', 'order' => 'DESC'];
+    if (\Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled()) {
+        $args['meta_query'] = [['key' => ORDER_CLIENT, 'value' => $id]];
+    } else {
+        $args['infiny_boutique_client'] = $id;
+    }
+    return wc_get_orders($args);
+}
+
+function client_profile(\WP_Post $record): void {
+    $id = $record->ID;
+    $details = client_details($id);
+    $orders = client_orders($id, max(1, absint(input($_GET, 'numero'))));
+    ?>
+    <div class="ib-toolbar">
+        <?php button('Retour aux clients', url('clients')); ?>
+        <?php button('Modifier la fiche', url('clients', ['id' => $id, 'modifier' => 1]), true); ?>
+    </div>
+    <section class="ib-panel">
+        <h2><?php echo esc_html($record->post_title); ?></h2>
+        <p>Téléphone <strong><?php echo esc_html($details['phone'] ?? '—'); ?></strong></p>
+    </section>
+    <section>
+        <h3>Historique d’achat</h3>
+        <?php if ($orders->total) : ?>
+            <p><?php echo esc_html(number_format_i18n($orders->total) . ($orders->total === 1 ? ' commande liée' : ' commandes liées')); ?></p>
+            <?php order_table($orders->orders, false); ?>
+            <?php pagination('clients', (int) $orders->max_num_pages, ['id' => $id]); ?>
+        <?php else : ?>
+            <p class="ib-empty">Aucune commande liée à ce client.</p>
+        <?php endif; ?>
+    </section>
+    <?php
 }
 
 function order_client(\WC_Order $order): ?\WP_Post {
@@ -170,6 +217,7 @@ function order_client_section(\WC_Order $order): void {
     ?>
     <p><strong><?php echo esc_html($name ?: 'Client non renseigné'); ?></strong>
         <?php if ($phone !== '') : ?> · <?php echo esc_html($phone); ?><?php endif; ?>
+        <?php if ($linked) : ?> · <a href="<?php echo esc_url(url('clients', ['id' => $linked->ID])); ?>">Voir la fiche client</a><?php endif; ?>
     </p>
     <?php if (current_user_can('edit_shop_order', $order->get_id())) : ?>
         <div class="ib-toolbar">
@@ -201,7 +249,7 @@ add_action('admin_post_infiny_boutique_client', function () {
         ($context === 'nouvelle' && !current_user_can('publish_shop_orders'))) {
         wp_die('Accès indisponible.', '', ['response' => 403]);
     }
-    $destination = url('clients', array_filter(['id' => $id, 'pour_commande' => $context]));
+    $destination = url('clients', array_filter(['id' => $id, 'modifier' => $id ? 1 : 0, 'pour_commande' => $context]));
     $last = input($_POST, 'nom');
     $first = input($_POST, 'prenom');
     $phone = input($_POST, 'telephone');
@@ -229,7 +277,7 @@ add_action('admin_post_infiny_boutique_client', function () {
     if ($context === 'nouvelle') {
         finish(url('commandes', ['nouveau' => 1, 'client' => $saved]));
     }
-    finish(url('clients'));
+    finish(url('clients', ['id' => $saved]));
 });
 
 add_action('admin_post_infiny_boutique_order_client', function () {

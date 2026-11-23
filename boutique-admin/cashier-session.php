@@ -48,12 +48,9 @@ function cashier_active_session(): ?array {
 
 function cashier_session_totals(array $session): array {
     $totals = ['count' => 0, 'methods' => array_fill_keys(array_keys(CASHIER_METHODS), 0)];
-    $range = $session['opened_at'] . '...' . time();
     $scale = 10 ** $session['decimals'];
-    foreach (dashboard_order_batches(['type' => 'shop_order', 'date_paid' => $range]) as $order) {
-        $payment = $order->get_meta(CASHIER_PAYMENT);
-        if (!is_array($payment) || (int) ($payment['session'] ?? 0) !== $session['id'] ||
-            !isset(CASHIER_METHODS[$payment['method'] ?? '']) || $order->get_currency() !== $session['currency']) {
+    foreach (cashier_recorded_payments($session['currency'], $session['opened_at'], time()) as [$order, $payment]) {
+        if ((int) ($payment['session'] ?? 0) !== $session['id']) {
             continue;
         }
         ++$totals['count'];
