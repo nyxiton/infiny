@@ -71,6 +71,7 @@ function order_board_card(\WC_Order $order, string $status, array $labels): void
             <strong><?php echo money($order->get_total(), ['currency' => $order->get_currency()]); ?></strong>
         </div>
         <div><?php echo esc_html(order_client_name($order) ?: 'Client non renseigné'); ?></div>
+        <?php delivery_badge($order); ?>
         <?php if ($date) : ?><small><?php echo esc_html(wc_format_datetime($date, 'd/m/Y H:i')); ?></small><?php endif; ?>
         <?php if ($editable) : ?>
             <form class="ib-order-move" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">

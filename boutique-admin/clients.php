@@ -116,13 +116,6 @@ function client_list(): void {
     <?php endif;
 }
 
-function editable_client_order(int $id): ?\WC_Order {
-    $order = $id && function_exists('wc_get_order') && can_manage() && current_user_can('edit_shop_order', $id)
-        ? wc_get_order($id)
-        : null;
-    return $order instanceof \WC_Order ? $order : null;
-}
-
 function order_client(\WC_Order $order): ?\WP_Post {
     return client((int) $order->get_meta(ORDER_CLIENT));
 }
@@ -203,7 +196,7 @@ add_action('admin_post_infiny_boutique_client', function () {
         finish(url('clients'), 'Client introuvable.');
     }
     $context = input($_POST, 'pour_commande');
-    $order = $context !== '' && $context !== 'nouvelle' ? editable_client_order(absint($context)) : null;
+    $order = $context !== '' && $context !== 'nouvelle' ? editable_order(absint($context)) : null;
     if (($context !== '' && $context !== 'nouvelle' && !$order) ||
         ($context === 'nouvelle' && !current_user_can('publish_shop_orders'))) {
         wp_die('Accès indisponible.', '', ['response' => 403]);
@@ -242,7 +235,7 @@ add_action('admin_post_infiny_boutique_client', function () {
 add_action('admin_post_infiny_boutique_order_client', function () {
     $id = absint(input($_POST, 'id'));
     check_admin_referer('ib-order-client-' . $id);
-    $order = editable_client_order($id);
+    $order = editable_order($id);
     if (!$order) {
         wp_die('Accès indisponible.', '', ['response' => 403]);
     }
@@ -256,7 +249,7 @@ add_action('admin_post_infiny_boutique_order_client', function () {
 });
 
 add_action('woocommerce_admin_order_data_after_billing_address', function ($order) {
-    if (input($_GET, 'ib_boutique') !== '1' || !editable_client_order($order->get_id())) {
+    if (input($_GET, 'ib_boutique') !== '1' || !editable_order($order->get_id())) {
         return;
     }
     $selected = order_client($order) ?: client(absint(input($_GET, 'ib_client')));
@@ -271,7 +264,7 @@ add_action('woocommerce_process_shop_order_meta', function ($id) {
     if ($nonce === '' || !wp_verify_nonce($nonce, 'ib-native-order-client-' . $id)) {
         return;
     }
-    $order = editable_client_order($id);
+    $order = editable_order($id);
     $client_id = absint(input($_POST, 'ib_client_id'));
     if ($order && (!$client_id || client($client_id))) {
         set_order_client($order, $client_id, true);

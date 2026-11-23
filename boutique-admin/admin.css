@@ -1006,3 +1006,349 @@ a.ib-product-card:hover {
     height: auto;
     background: #fff;
 }
+
+.ib-delivery-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ib-delivery-badge {
+    width: fit-content;
+    background: var(--accent-wash);
+    color: var(--accent-dark);
+}
+
+.ib-cashier-top {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.ib-cashier {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+    align-items: start;
+    gap: 16px;
+}
+
+.ib-cashier-catalog, .ib-cashier-payment, .ib-cashier-receipt {
+    min-width: 0;
+    padding: clamp(14px, 2.2vw, 24px);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.ib-cashier-catalog h2, .ib-cashier-payment h2, .ib-cashier-daily h2, .ib-cashier-receipt h2 {
+    margin: 0 0 14px;
+    font-size: 20px;
+}
+
+.ib-cashier-payment {
+    position: sticky;
+    top: 12px;
+}
+
+.ib-cashier-search {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.ib-cashier-search > div {
+    display: flex;
+    gap: 8px;
+}
+
+.ib-cashier-search input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.ib-cashier-muted {
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.ib-cashier-muted:empty, .ib-cashier-error:empty {
+    margin: 0;
+}
+
+.ib-cashier-products {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr));
+    gap: 10px;
+    max-height: 540px;
+    overflow: auto;
+    padding: 3px;
+}
+
+.ib-cashier-product {
+    display: flex;
+    min-width: 0;
+    min-height: 100px;
+    padding: 10px;
+    flex-direction: column;
+    gap: 5px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #f7fbfc;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ib-cashier-product:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--accent-wash);
+}
+
+.ib-cashier-product:disabled {
+    opacity: .62;
+    cursor: default;
+}
+
+.ib-cashier-product img {
+    display: block;
+    width: 46px;
+    height: 46px;
+    object-fit: cover;
+    border-radius: 5px;
+}
+
+.ib-cashier-product span {
+    color: var(--accent-dark);
+    font-weight: 650;
+}
+
+.ib-cashier-lines {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ib-cashier-lines li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding-block: 8px;
+    border-bottom: 1px solid var(--line);
+}
+
+#ib-cashier-lines {
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 2px;
+}
+
+.ib-cashier-lines li > span { flex: 1 1 auto; }
+.ib-cashier-lines li > strong { text-align: right; }
+
+.ib-cashier-quantity {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+}
+
+.ib-cashier-quantity .button {
+    min-width: 34px;
+    min-height: 36px;
+    padding: 3px 7px;
+}
+
+.ib-cashier-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin: 12px 0;
+    padding: 10px 12px;
+    border-radius: 7px;
+    background: var(--accent-wash);
+    font-weight: 650;
+}
+
+.ib-cashier-total strong {
+    font-size: clamp(20px, 3vw, 28px);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.ib-cashier-client {
+    margin-bottom: 12px;
+}
+
+.ib-cashier-client summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.ib-cashier-client label {
+    display: block;
+    margin-top: 8px;
+}
+
+.ib-cashier-methods {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+    margin: 0 0 12px;
+    padding: 0;
+    border: 0;
+}
+
+.ib-cashier-methods legend {
+    margin-bottom: 5px;
+    padding: 0;
+}
+
+.ib-cashier-methods label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 44px;
+    padding: 5px 7px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.ib-cashier-methods label:has(:checked) {
+    border-color: var(--accent);
+    background: var(--accent-wash);
+}
+
+.ib-cashier-methods input {
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+#ib-cashier-cash, #ib-cashier-mobile {
+    display: grid;
+    gap: 5px;
+}
+
+.ib-cashier [hidden] {
+    display: none !important;
+}
+
+.ib .ib-cashier-exact {
+    margin-top: 7px;
+    min-height: 36px;
+}
+
+.ib-cashier-change {
+    margin-top: 8px;
+    font-weight: 650;
+    color: #206541;
+}
+
+.ib-cashier-error {
+    color: #9a2836;
+    font-size: 14px;
+}
+
+.ib .ib-cashier-confirm {
+    width: 100%;
+    min-height: 50px;
+    margin-top: 10px;
+    font-size: 16px;
+}
+
+.ib-cashier-confirm:disabled {
+    opacity: .55;
+    cursor: default;
+}
+
+.ib-cashier-daily {
+    margin-top: 18px;
+    scroll-margin-top: 16px;
+}
+
+.ib-cashier-daily .ib-dashboard-list {
+    max-width: 560px;
+}
+
+.ib-cashier-history-table {
+    margin-top: 16px;
+}
+
+.ib-cashier-history-table td > a {
+    color: var(--accent-dark);
+    font-weight: 650;
+}
+
+.ib-cashier-receipt {
+    max-width: 480px;
+}
+
+.ib-cashier-receipt-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    align-items: start;
+    gap: 16px;
+}
+
+.ib-order-with-ticket {
+    margin-top: 16px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.ib-order-with-ticket > .ib-panel {
+    min-width: 0;
+    margin: 0;
+}
+
+.ib-cashier-preview {
+    min-width: 0;
+    padding: clamp(14px, 2.2vw, 24px);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.ib-cashier-preview h2 {
+    margin: 0 0 14px;
+    font-size: 20px;
+}
+
+.ib-cashier-preview iframe {
+    display: block;
+    width: 100%;
+    height: clamp(420px, 68vh, 710px);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #eff6f8;
+}
+
+@media (max-width: 760px) {
+    .ib-cashier, .ib-cashier-receipt-layout { grid-template-columns: minmax(0, 1fr); }
+    .ib-cashier-receipt { max-width: none; }
+    .ib-cashier-payment { position: static; }
+    .ib-cashier-products { max-height: 340px; }
+}
+
+@media print {
+    .ib-page:has(.ib-cashier-receipt) { background: #fff; }
+    .ib:has(.ib-cashier-receipt) { padding: 0; }
+    .ib:has(.ib-cashier-receipt) :is(.ib-shell, main > h1, .ib-no-print) { display: none; }
+    .ib-cashier-receipt-layout { display: block; }
+    .ib-cashier-receipt { border: 0; padding: 0; }
+}
+
+.ib-dashboard-list .ib-session-expected {
+    padding-inline: 10px;
+    border-radius: 5px;
+    background: var(--accent-wash);
+    font-weight: 700;
+}
+
+.ib-session-difference {
+    color: #9a2836;
+    font-weight: 700;
+}

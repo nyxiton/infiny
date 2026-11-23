@@ -7,6 +7,7 @@ defined('ABSPATH') || exit;
 const MENU = 'infiny-boutique';
 const TABS = [
     'accueil' => 'Tableau de bord',
+    'caisse' => 'Caisse',
     'produits' => 'Produits',
     'categories' => 'Catégories',
     'stock' => 'Stock',
@@ -18,6 +19,13 @@ const TABS = [
 
 function can_manage(): bool {
     return current_user_can('manage_options') && current_user_can('manage_woocommerce');
+}
+
+function editable_order(int $id): ?\WC_Order {
+    $order = $id && function_exists('wc_get_order') && can_manage() && current_user_can('edit_shop_order', $id)
+        ? wc_get_order($id)
+        : null;
+    return $order instanceof \WC_Order ? $order : null;
 }
 
 function url(string $tab = 'accueil', array $args = []): string {
@@ -32,6 +40,10 @@ require_once __DIR__ . '/finance.php';
 require_once __DIR__ . '/restock.php';
 require_once __DIR__ . '/clients.php';
 require_once __DIR__ . '/order-qr.php';
+require_once __DIR__ . '/order-delivery.php';
+require_once __DIR__ . '/cashier.php';
+require_once __DIR__ . '/cashier-ticket.php';
+require_once __DIR__ . '/cashier-session.php';
 
 add_action('admin_menu', function () {
     if (can_manage()) {
@@ -126,6 +138,7 @@ function render(): void {
     $tab = isset(TABS[$tab]) ? $tab : 'accueil';
     $icons = [
         'accueil' => 'dashboard',
+        'caisse' => 'calculator',
         'produits' => 'tag',
         'categories' => 'category',
         'stock' => 'archive',
@@ -164,6 +177,9 @@ function render(): void {
         }
         $id = absint(input($_GET, 'id'));
         switch ($tab) {
+            case 'caisse':
+                cashier();
+                break;
             case 'produits':
             case 'stock':
                 if ($restock) {
@@ -638,6 +654,7 @@ function order_table(array $orders): void {
         if ($reference) {
             printf('<small class="ib-order-reference">%s</small>', esc_html($reference));
         }
+        delivery_badge($order);
         echo '</td><td>' . esc_html($date ? wc_format_datetime($date, 'd/m/Y H:i') : '—') . '</td>';
         echo '<td>' . esc_html(order_client_name($order) ?: '—') . '</td>';
         echo '<td>' . money($order->get_total(), ['currency' => $order->get_currency()]) . '</td>';
@@ -656,39 +673,53 @@ function order_detail(int $id): void {
         echo '<p class="ib-empty">Commande introuvable.</p>';
         return;
     }
+    $has_ticket = $order->get_date_paid() && $order->get_meta(CASHIER_PAYMENT) && current_user_can('edit_shop_order', $id);
     button('Retour aux commandes', url('commandes'));
+    if (cashier_can_take_payment($order) && current_user_can('edit_shop_order', $id)) {
+        echo ' ';
+        button('Encaisser', url('caisse', ['commande' => $id]), true);
+    } elseif ($has_ticket) {
+        echo ' ';
+        button('Télécharger le ticket PDF', cashier_ticket_url($id));
+    }
     $labels = statuses();
     $status = 'wc-' . $order->get_status();
     ?>
-    <section class="ib-panel">
-        <h3>Commande #<?php echo esc_html($order->get_order_number()); ?></h3>
-        <?php order_client_section($order); ?>
-        <p>Statut actuel <strong><?php echo esc_html($labels[$status] ?? $status); ?></strong></p>
-        <div class="ib-table"><table><thead><tr><th>Produit</th><th>Quantité</th><th>Montant</th></tr></thead><tbody>
-            <?php foreach ($order->get_items() as $item) : ?>
-                <tr><td><?php echo esc_html($item->get_name()); ?></td>
-                    <td><?php echo esc_html($item->get_quantity()); ?></td>
-                    <td><?php echo money($order->get_line_total($item, true), ['currency' => $order->get_currency()]); ?></td></tr>
-            <?php endforeach; ?>
-        </tbody></table></div>
-        <p>Total de la commande <strong><?php echo money($order->get_total(), ['currency' => $order->get_currency()]); ?></strong></p>
-        <?php render_order_sms($order); ?>
-        <?php if (current_user_can('edit_shop_order', $id) && $status !== 'wc-refunded') : ?>
-            <form class="ib-toolbar" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" method="post">
-                <input type="hidden" name="action" value="infiny_boutique_order">
-                <input type="hidden" name="id" value="<?php echo esc_attr($id); ?>">
-                <?php wp_nonce_field('ib-order-' . $id); ?>
-                <label for="ib-order-status">Changer le statut</label>
-                <select id="ib-order-status" name="statut">
-                    <?php foreach ([$status => $labels[$status] ?? $status] + editable_statuses() as $code => $label) : ?>
-                        <option value="<?php echo esc_attr($code); ?>" <?php selected($status, $code); ?>><?php echo esc_html($label); ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <button class="button button-primary">Enregistrer le statut</button>
-            </form>
-            <?php button('Autres actions dans WooCommerce', $order->get_edit_order_url()); ?>
-        <?php endif; ?>
-    </section>
+    <div<?php if ($has_ticket) echo ' class="ib-cashier-receipt-layout ib-order-with-ticket"'; ?>>
+        <section class="ib-panel">
+            <h3>Commande #<?php echo esc_html($order->get_order_number()); ?></h3>
+            <?php order_client_section($order); ?>
+            <?php order_delivery_form($order); ?>
+            <p>Statut actuel <strong><?php echo esc_html($labels[$status] ?? $status); ?></strong></p>
+            <div class="ib-table"><table><thead><tr><th>Produit</th><th>Quantité</th><th>Montant</th></tr></thead><tbody>
+                <?php foreach ($order->get_items() as $item) : ?>
+                    <tr><td><?php echo esc_html($item->get_name()); ?></td>
+                        <td><?php echo esc_html($item->get_quantity()); ?></td>
+                        <td><?php echo money($order->get_line_total($item, true), ['currency' => $order->get_currency()]); ?></td></tr>
+                <?php endforeach; ?>
+            </tbody></table></div>
+            <p>Total de la commande <strong><?php echo money($order->get_total(), ['currency' => $order->get_currency()]); ?></strong></p>
+            <?php render_order_sms($order); ?>
+            <?php if (current_user_can('edit_shop_order', $id) && $status !== 'wc-refunded') : ?>
+                <form class="ib-toolbar" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" method="post">
+                    <input type="hidden" name="action" value="infiny_boutique_order">
+                    <input type="hidden" name="id" value="<?php echo esc_attr($id); ?>">
+                    <?php wp_nonce_field('ib-order-' . $id); ?>
+                    <label for="ib-order-status">Changer le statut</label>
+                    <select id="ib-order-status" name="statut">
+                        <?php foreach ([$status => $labels[$status] ?? $status] + editable_statuses() as $code => $label) : ?>
+                            <option value="<?php echo esc_attr($code); ?>" <?php selected($status, $code); ?>><?php echo esc_html($label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button class="button button-primary">Enregistrer le statut</button>
+                </form>
+                <?php button('Autres actions dans WooCommerce', $order->get_edit_order_url()); ?>
+            <?php endif; ?>
+        </section>
+        <?php if ($has_ticket) {
+            cashier_ticket_preview($id);
+        } ?>
+    </div>
     <?php
 }
 

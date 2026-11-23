@@ -39,7 +39,8 @@ function dashboard(): void {
             </div>
             <div class="ib-dashboard-actions">
                 <?php if (current_user_can('publish_shop_orders')) {
-                    button('Nouvelle commande', url('commandes', ['nouveau' => 1]), true);
+                    button('Ouvrir la caisse', url('caisse'), true);
+                    button('Nouvelle commande', url('commandes', ['nouveau' => 1]));
                 }
                 if (current_user_can('publish_products')) {
                     button('Ajouter un produit', url('produits', ['nouveau' => 1]));
